@@ -20,10 +20,12 @@ export type AuthVariables = {
  */
 export function requireApiKey(deps: { db: Db; keys: KeyProvider }) {
   return createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
-    const header = c.req.header("authorization");
-    const secret = header?.startsWith("Bearer ")
-      ? header.slice("Bearer ".length).trim()
-      : undefined;
+    // The auth scheme is case-insensitive (RFC 9110 §11.1); the secret isn't.
+    const match = /^(\S+)\s+(\S+)\s*$/.exec(
+      c.req.header("authorization") ?? "",
+    );
+    const secret =
+      match?.[1]?.toLowerCase() === "bearer" ? match[2] : undefined;
     if (!secret) {
       throw new ApiError(
         401,
