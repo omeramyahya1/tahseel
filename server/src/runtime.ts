@@ -4,6 +4,7 @@ import { createDb, type Db } from "./db/client";
 import type { Env } from "./env";
 import { pgEventBus } from "./modules/events";
 import type { PaymentsDeps } from "./modules/payments";
+import type { WebhookDeps } from "./modules/webhooks";
 
 // Composition root shared by api.ts and worker.ts.
 
@@ -32,5 +33,9 @@ export function createRuntime(env: Env) {
     apiKeyPepper: env.API_KEY_PEPPER,
     secretsEncryptionKey: env.SECRETS_ENCRYPTION_KEY,
   });
-  return { db, sql, keys, payments: createPaymentsDeps(db) };
+  const webhooks: WebhookDeps = {
+    keys,
+    urlPolicy: { allowPrivate: env.WEBHOOK_ALLOW_PRIVATE_URLS },
+  };
+  return { db, sql, keys, payments: createPaymentsDeps(db), webhooks };
 }

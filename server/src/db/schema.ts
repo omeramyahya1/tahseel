@@ -390,3 +390,83 @@ export const idempotencyKeys = pgTable(
     index("idempotency_keys_created_at_idx").on(t.createdAt),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: uuid().primaryKey(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    url: text().notNull(),
+    description: text(),
+    // Event types, or ["*"] for all.
+    enabledEvents: text().array().notNull(),
+    // AES-256-GCM via KeyProvider; the signing secret must be recoverable.
+    secretEncrypted: bytea().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [
+    check(
+      "webhook_endpoints_enabled_events_nonempty",
+      sql`cardinality(${t.enabledEvents}) > 0`,
+    ),
+    index("webhook_endpoints_merchant_idx").on(t.merchantId, t.livemode),
+  ],
+);
+
+export const webhookDeliveryStatus = pgEnum("webhook_delivery_status", [
+  "pending",
+  "succeeded",
+  "failed",
+]);
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid().primaryKey(),
+    // No FK: events is partitioned on created_at (microseconds), which can't
+    // round-trip through a JS Date. Events are append-only, so the id is stable.
+    eventId: uuid().notNull(),
+    endpointId: uuid()
+      .notNull()
+      .references(() => webhookEndpoints.id),
+    status: webhookDeliveryStatus().notNull().default("pending"),
+    attempts: integer().notNull().default(0),
+    lastAttemptAt: timestamp({ withTimezone: true }),
+    lastResponseStatus: integer(),
+    lastError: text(),
+    succeededAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One delivery per (event, endpoint): dispatch is idempotent.
+    unique("webhook_deliveries_event_endpoint_key").on(t.eventId, t.endpointId),
+  ],
+);
+
+export const webhookDeliveryAttempts = pgTable(
+  "webhook_delivery_attempts",
+  {
+    id: uuid().primaryKey(),
+    deliveryId: uuid()
+      .notNull()
+      .references(() => webhookDeliveries.id),
+    attemptNumber: integer().notNull(),
+    requestedAt: timestamp({ withTimezone: true }).notNull(),
+    durationMs: integer().notNull(),
+    responseStatus: integer(),
+    error: text(),
+    // First 1 KB of the response body, for debugging.
+    responseExcerpt: text(),
+  },
+  (t) => [index("webhook_delivery_attempts_delivery_idx").on(t.deliveryId)],
+);

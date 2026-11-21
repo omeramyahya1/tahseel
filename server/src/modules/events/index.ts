@@ -1,5 +1,6 @@
 export {
   DISPATCH_EVENT,
+  EVENT_TYPES,
   EVENTS_QUEUE,
   type EventBus,
   type EventRow,
@@ -7,5 +8,11 @@ export {
   type PublishInput,
   pgEventBus,
 } from "./bus";
-export { eventJobHandlers } from "./handlers";
 export { ensureEventPartitions } from "./partitions";
+export {
+  getEvent,
+  getEventById,
+  listEvents,
+  type PublicEvent,
+  presentEvent,
+} from "./queries";

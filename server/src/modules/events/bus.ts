@@ -5,13 +5,16 @@ import { newId } from "../../lib/ids";
 
 export type EventRow = typeof events.$inferSelect;
 
-export type EventType =
-  | "payment_intent.created"
-  | "payment_intent.processing"
-  | "payment_intent.succeeded"
-  | "payment_intent.payment_failed"
-  | "payment_intent.canceled"
-  | "payment_intent.expired";
+export const EVENT_TYPES = [
+  "payment_intent.created",
+  "payment_intent.processing",
+  "payment_intent.succeeded",
+  "payment_intent.payment_failed",
+  "payment_intent.canceled",
+  "payment_intent.expired",
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
 
 export type PublishInput = {
   type: EventType;
