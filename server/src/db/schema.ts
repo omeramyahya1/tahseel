@@ -249,3 +249,113 @@ export const events = pgTable(
     index("events_merchant_idx").on(t.merchantId, t.livemode, t.createdAt),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+// State machine and immutable columns are enforced by triggers in
+// migrations/0006_payments_invariants.sql (mirrors modules/payments/status.ts).
+
+export const paymentIntentStatus = pgEnum("payment_intent_status", [
+  "requires_confirmation",
+  "processing",
+  "succeeded",
+  "canceled",
+  "expired",
+]);
+
+export const paymentAttemptStatus = pgEnum("payment_attempt_status", [
+  "pending", // created, request-to-pay not yet accepted by the rail
+  "sent", // rail accepted the request-to-pay; awaiting the payer
+  "succeeded",
+  "declined",
+  "expired",
+]);
+
+export const paymentIntents = pgTable(
+  "payment_intents",
+  {
+    id: uuid().primaryKey(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    amount: bigint({ mode: "bigint" }).notNull(),
+    currency: char({ length: 3 }).notNull(),
+    status: paymentIntentStatus().notNull(),
+    description: text(),
+    merchantReference: text(),
+    metadata: jsonb().$type<Record<string, string>>().notNull(),
+    // Latest confirm attempt; FK added in the custom migration (circular).
+    latestAttemptId: uuid(),
+    // Accrued fee, set when the payment succeeds.
+    fee: bigint({ mode: "bigint" }),
+    lastPaymentError: jsonb().$type<{ code: string; message: string }>(),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    succeededAt: timestamp({ withTimezone: true }),
+    canceledAt: timestamp({ withTimezone: true }),
+    expiredAt: timestamp({ withTimezone: true }),
+    reconciledAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("payment_intents_amount_positive", sql`${t.amount} > 0`),
+    check("payment_intents_currency_sdg", sql`${t.currency} = 'SDG'`),
+    check(
+      "payment_intents_fee_range",
+      sql`${t.fee} IS NULL OR (${t.fee} >= 0 AND ${t.fee} <= ${t.amount})`,
+    ),
+    check(
+      "payment_intents_expires_after_created",
+      sql`${t.expiresAt} > ${t.createdAt}`,
+    ),
+    index("payment_intents_merchant_list_idx").on(
+      t.merchantId,
+      t.livemode,
+      t.id,
+    ),
+    index("payment_intents_expiry_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'requires_confirmation'`),
+  ],
+);
+
+export const paymentAttempts = pgTable(
+  "payment_attempts",
+  {
+    id: uuid().primaryKey(),
+    paymentIntentId: uuid()
+      .notNull()
+      .references(() => paymentIntents.id),
+    livemode: boolean().notNull(),
+    rail: text().notNull(),
+    payerAlias: text().notNull(),
+    status: paymentAttemptStatus().notNull().default("pending"),
+    railReference: text(),
+    failureCode: text(),
+    failureMessage: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("payment_attempts_rail_reference_key").on(t.rail, t.railReference),
+    index("payment_attempts_intent_idx").on(t.paymentIntentId),
+  ],
+);
+
+export const paymentIntentTransitions = pgTable(
+  "payment_intent_transitions",
+  {
+    id: uuid().primaryKey(),
+    paymentIntentId: uuid()
+      .notNull()
+      .references(() => paymentIntents.id),
+    fromStatus: paymentIntentStatus(),
+    toStatus: paymentIntentStatus().notNull(),
+    attemptId: uuid().references(() => paymentAttempts.id),
+    reason: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("payment_intent_transitions_intent_idx").on(t.paymentIntentId)],
+);
