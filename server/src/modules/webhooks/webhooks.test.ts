@@ -61,7 +61,7 @@ async function setup(enabledEvents = ["*"]) {
   received = [];
   respondWith = 200;
   const merchant = await createTestMerchant(t.db);
-  const { endpoint, secret } = await createWebhookEndpoint(t.db, deps, {
+  const { endpoint, secret } = await createEp(deps, {
     merchantId: merchant.id,
     livemode: false,
     url: receiverUrl,
@@ -83,6 +83,11 @@ async function publish(
     }),
   );
 }
+
+const createEp = (
+  d: Parameters<typeof createWebhookEndpoint>[1],
+  input: Parameters<typeof createWebhookEndpoint>[2],
+) => withTx(t.db, (tx) => createWebhookEndpoint(tx, d, input));
 
 const run = async () => {
   await drain(t.db, EVENTS_QUEUE, eventDispatchHandlers(t.db));
@@ -111,7 +116,7 @@ describe("webhook endpoints", () => {
       ["http://127.0.0.1/x", false],
       ["http://example.com/x", true],
     ] as const) {
-      const err = await createWebhookEndpoint(t.db, strict, {
+      const err = await createEp(strict, {
         merchantId: merchant.id,
         livemode,
         url,
@@ -125,7 +130,7 @@ describe("webhook endpoints", () => {
   test(`at most ${MAX_ENDPOINTS_PER_MODE} endpoints per mode`, async () => {
     const merchant = await createTestMerchant(t.db);
     const make = () =>
-      createWebhookEndpoint(t.db, deps, {
+      createEp(deps, {
         merchantId: merchant.id,
         livemode: false,
         url: receiverUrl,
@@ -250,7 +255,7 @@ describe("dispatch and delivery", () => {
     });
     try {
       const merchant = await createTestMerchant(t.db);
-      await createWebhookEndpoint(t.db, deps, {
+      await createEp(deps, {
         merchantId: merchant.id,
         livemode: false,
         url: `http://localhost:${redirector.port}/`,
@@ -304,5 +309,62 @@ describe("dispatch and delivery", () => {
     } catch (err) {
       expect(pgErrorCode(err)).toBe("TA001");
     }
+  });
+
+  test("a 2xx with a huge or never-ending body succeeds; only 1 KB is kept", async () => {
+    const endless = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(new Uint8Array(64 * 1024).fill(97)); // "aaaa…"
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+    try {
+      const merchant = await createTestMerchant(t.db);
+      await createEp(deps, {
+        merchantId: merchant.id,
+        livemode: false,
+        url: `http://localhost:${endless.port}/`,
+        enabledEvents: ["*"],
+      });
+      const event = await publish(merchant);
+      await run();
+      const [delivery] = await deliveriesFor(event.id);
+      expect(delivery?.status).toBe("succeeded");
+      const [attempt] = await t.db
+        .select()
+        .from(webhookDeliveryAttempts)
+        .where(eq(webhookDeliveryAttempts.deliveryId, must(delivery).id));
+      expect(attempt?.responseExcerpt?.length).toBe(1024);
+    } finally {
+      endless.stop(true);
+    }
+  });
+});
+
+describe("endpoint limit under concurrency", () => {
+  test(`concurrent creates never exceed ${MAX_ENDPOINTS_PER_MODE}`, async () => {
+    const merchant = await createTestMerchant(t.db);
+    const results = await Promise.allSettled(
+      Array.from({ length: MAX_ENDPOINTS_PER_MODE + 4 }, () =>
+        createEp(deps, {
+          merchantId: merchant.id,
+          livemode: false,
+          url: receiverUrl,
+          enabledEvents: ["*"],
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(
+      MAX_ENDPOINTS_PER_MODE,
+    );
+    const [row] = await t.sql`
+      select count(*)::int as n from webhook_endpoints where merchant_id = ${merchant.id}`;
+    expect(row?.n).toBe(MAX_ENDPOINTS_PER_MODE);
   });
 });

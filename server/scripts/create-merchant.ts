@@ -13,17 +13,27 @@ import { createDb, withTx } from "../src/db/client";
 import { loadEnv } from "../src/env";
 import { createApiKey, createMerchant } from "../src/modules/merchants";
 
-const { values } = parseArgs({
-  options: {
-    name: { type: "string" },
-    "bank-code": { type: "string" },
-    account: { type: "string" },
-    "fee-bps": { type: "string", default: "0" },
-    "fee-fixed": { type: "string", default: "0" },
-    "fee-min": { type: "string" },
-    "fee-max": { type: "string" },
-  },
-});
+function parse() {
+  return parseArgs({
+    options: {
+      name: { type: "string" },
+      "bank-code": { type: "string" },
+      account: { type: "string" },
+      "fee-bps": { type: "string", default: "0" },
+      "fee-fixed": { type: "string", default: "0" },
+      "fee-min": { type: "string" },
+      "fee-max": { type: "string" },
+    },
+  });
+}
+
+let values: ReturnType<typeof parse>["values"];
+try {
+  values = parse().values;
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 
 const name = values.name;
 const bankCode = values["bank-code"];
@@ -33,8 +43,43 @@ if (!name || !bankCode || !account) {
   process.exit(1);
 }
 
-const toBigInt = (v: string | undefined) =>
-  v === undefined ? null : BigInt(v);
+// Validate whole values (no partial parses like parseInt("1.5") === 1)
+// before connecting to the database.
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+function parseBps(raw: string): number {
+  if (!/^\d+$/.test(raw)) fail(`--fee-bps must be an integer, got "${raw}"`);
+  const bps = Number(raw);
+  if (bps > 10_000) fail(`--fee-bps must be between 0 and 10000, got ${bps}`);
+  return bps;
+}
+
+function parsePiasters(flag: string, raw: string): bigint {
+  if (!/^\d+$/.test(raw)) {
+    fail(`--${flag} must be a non-negative integer (piasters), got "${raw}"`);
+  }
+  return BigInt(raw);
+}
+
+const optionalPiasters = (flag: string, raw: string | undefined) =>
+  raw === undefined ? null : parsePiasters(flag, raw);
+
+const pricing = {
+  feeBps: parseBps(values["fee-bps"]),
+  feeFixed: parsePiasters("fee-fixed", values["fee-fixed"]),
+  feeMin: optionalPiasters("fee-min", values["fee-min"]),
+  feeMax: optionalPiasters("fee-max", values["fee-max"]),
+};
+if (
+  pricing.feeMin !== null &&
+  pricing.feeMax !== null &&
+  pricing.feeMin > pricing.feeMax
+) {
+  fail("--fee-min must not exceed --fee-max");
+}
 
 const env = loadEnv();
 const { db, sql } = createDb(env.DATABASE_URL, { max: 1 });
@@ -49,12 +94,7 @@ try {
       name,
       creditorBankCode: bankCode,
       creditorAccount: account,
-      pricing: {
-        feeBps: Number.parseInt(values["fee-bps"], 10),
-        feeFixed: BigInt(values["fee-fixed"]),
-        feeMin: toBigInt(values["fee-min"]),
-        feeMax: toBigInt(values["fee-max"]),
-      },
+      pricing,
     });
     const test = await createApiKey(tx, keys, {
       merchantId: merchant.id,

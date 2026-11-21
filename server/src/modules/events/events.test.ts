@@ -85,6 +85,30 @@ describe("pgEventBus", () => {
       "TA001",
     );
     await expectSqlState(t.sql`truncate events`, "TA001");
+
+    // Each partition is guarded too, not just the parent.
+    const [{ part } = { part: "" }] =
+      await t.sql`select tableoid::regclass::text as part from events where id = ${event.id}`;
+    await expectSqlState(t.sql.unsafe(`truncate ${part}`), "TA001");
+    await expectSqlState(t.sql`truncate events_default`, "TA001");
+    // Row-level guards still apply when targeting a partition directly.
+    await expectSqlState(
+      t.sql.unsafe(`delete from ${part} where id = '${event.id}'`),
+      "TA001",
+    );
+  });
+
+  test("partitions created later are guarded as well", async () => {
+    await ensureEventPartitions(t.db, 6);
+    const rows = await t.sql`
+      select c.relname, exists (
+        select 1 from pg_trigger tg
+        where tg.tgrelid = c.oid and tg.tgname = c.relname || '_no_truncate'
+      ) as guarded
+      from pg_inherits i join pg_class c on c.oid = i.inhrelid
+      where i.inhparent = 'events'::regclass`;
+    expect(rows.length).toBeGreaterThanOrEqual(7);
+    expect(rows.filter((r) => !r.guarded)).toEqual([]);
   });
 
   test("ensureEventPartitions is idempotent and creates months ahead", async () => {

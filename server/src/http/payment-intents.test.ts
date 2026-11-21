@@ -141,8 +141,8 @@ describe("POST /v1/payment_intents", () => {
     const idem = newId();
     const raw = JSON.stringify({ amount: 100, currency: "SDG" });
     const { createHash } = await import("node:crypto");
-    await t.sql`insert into idempotency_keys (merchant_id, livemode, key, request_hash)
-      values (${merchant.id}, false, ${idem},
+    await t.sql`insert into idempotency_keys (merchant_id, livemode, key, claim_token, request_hash)
+      values (${merchant.id}, false, ${idem}, gen_random_uuid(),
               ${createHash("sha256").update(`POST\n/v1/payment_intents\n${raw}`).digest()})`;
     const res = await app.request("/v1/payment_intents", {
       method: "POST",
@@ -244,15 +244,18 @@ describe("GET /v1/payment_intents", () => {
     for (let i = 0; i < 3; i++) {
       ids.push((await createIntent({}, { key })).body.id);
     }
+    // Public IDs are Crockford base32 ULIDs: lexicographic = ID order.
+    // (Same-millisecond IDs have random suffixes; don't assume insertion order.)
+    const sorted = [...ids].sort().reverse();
     const page1 = await call("GET", "/payment_intents?limit=2", { key });
     expect(page1.body).toMatchObject({ object: "list", has_more: true });
-    expect(page1.body.data.map((p: Json) => p.id)).toEqual([ids[2], ids[1]]);
+    expect(page1.body.data.map((p: Json) => p.id)).toEqual(sorted.slice(0, 2));
     const page2 = await call(
       "GET",
-      `/payment_intents?limit=2&starting_after=${ids[1]}`,
+      `/payment_intents?limit=2&starting_after=${page1.body.data[1].id}`,
       { key },
     );
-    expect(page2.body.data.map((p: Json) => p.id)).toEqual([ids[0]]);
+    expect(page2.body.data.map((p: Json) => p.id)).toEqual(sorted.slice(2));
     expect(page2.body.has_more).toBe(false);
 
     const bad = await call("GET", "/payment_intents?limit=500", { key });

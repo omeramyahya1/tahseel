@@ -9,7 +9,11 @@ import { createDb } from "../src/db/client";
 // Rollback-based isolation is not an option: the ledger's deferred
 // constraint triggers only fire at COMMIT.
 
-const TEMPLATE = "tahseel_test_template";
+// Unique per test run, so concurrent `bun test` runs never drop, migrate or
+// clone each other's template. Set once by the preload (test/setup.ts) via
+// the environment, so every importer in this run agrees on the name.
+process.env.TAHSEEL_TEST_TEMPLATE ??= `tahseel_test_template_${randomBytes(6).toString("hex")}`;
+const TEMPLATE = process.env.TAHSEEL_TEST_TEMPLATE;
 const MIGRATIONS = path.join(import.meta.dir, "..", "migrations");
 
 const adminUrl =
@@ -29,7 +33,6 @@ function admin() {
 export async function prepareTemplateDb() {
   const sql = admin();
   try {
-    await sql.unsafe(`DROP DATABASE IF EXISTS ${TEMPLATE} WITH (FORCE)`);
     await sql.unsafe(`CREATE DATABASE ${TEMPLATE}`);
   } finally {
     await sql.end();
@@ -42,6 +45,15 @@ export async function prepareTemplateDb() {
     await migrate(db, { migrationsFolder: MIGRATIONS });
   } finally {
     await tsql.end();
+  }
+}
+
+export async function dropTemplateDb() {
+  const sql = admin();
+  try {
+    await sql.unsafe(`DROP DATABASE IF EXISTS ${TEMPLATE} WITH (FORCE)`);
+  } finally {
+    await sql.end();
   }
 }
 

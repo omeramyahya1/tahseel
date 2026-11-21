@@ -66,6 +66,19 @@ describe("requireApiKey", () => {
     expect(await res.json()).toEqual({ merchant: m.id, livemode: true });
   });
 
+  test("the Bearer scheme is case-insensitive; the secret isn't", async () => {
+    const m = await createTestMerchant(t.db);
+    const { secret } = await createApiKey(t.db, keys, {
+      merchantId: m.id,
+      livemode: false,
+    });
+    for (const scheme of ["Bearer", "bearer", "BEARER"]) {
+      expect((await get(`${scheme} ${secret}`)).status).toBe(200);
+    }
+    const flipped = secret.replace(/[a-z]/, (ch) => ch.toUpperCase());
+    expect((await get(`Bearer ${flipped}`)).status).toBe(401);
+  });
+
   test("403 merchant_suspended", async () => {
     const m = await createTestMerchant(t.db);
     const { secret } = await createApiKey(t.db, keys, {

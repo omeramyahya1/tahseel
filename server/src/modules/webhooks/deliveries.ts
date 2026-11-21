@@ -26,6 +26,36 @@ export const RETRY_SCHEDULE_SECONDS = [
 ] as const;
 export const MAX_DELIVERY_ATTEMPTS = RETRY_SCHEDULE_SECONDS.length + 1;
 
+const EXCERPT_BYTES = 1024;
+
+/**
+ * Reads at most EXCERPT_BYTES of the response body, then cancels the rest
+ * of the stream: a huge or never-ending body must not hold memory or the
+ * worker. Returns null when there's no content or reading fails.
+ */
+async function readExcerpt(res: Response): Promise<string | null> {
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < EXCERPT_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const text = Buffer.concat(chunks)
+    .subarray(0, EXCERPT_BYTES)
+    .toString("utf8");
+  return text || null;
+}
+
 export type WebhookDeps = {
   keys: KeyProvider;
   urlPolicy: UrlPolicy;
@@ -163,7 +193,7 @@ export async function deliverWebhook(
         body,
       });
       responseStatus = res.status;
-      excerpt = (await res.text().catch(() => "")).slice(0, 1024) || null;
+      excerpt = await readExcerpt(res);
     } catch (err) {
       error =
         err instanceof Error ? `${err.name}: ${err.message}` : String(err);

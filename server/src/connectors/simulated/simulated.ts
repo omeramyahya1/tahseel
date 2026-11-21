@@ -63,6 +63,14 @@ export function createSimulatedRail(deps: {
         status.reasonMessage = "The payer didn't respond before expiry.";
         runAt = req.expiresAt;
       }
+      // Like a real rail, never let the payer act after the deadline: a
+      // response that would land after expiresAt is an expiry instead.
+      if (outcome !== "expired" && runAt > req.expiresAt) {
+        outcome = "expired";
+        status.reasonCode = "request_expired";
+        status.reasonMessage = "The payer didn't respond before expiry.";
+        runAt = req.expiresAt;
+      }
 
       const payload: RailStatus = {
         rail: SIMULATED_RAIL,

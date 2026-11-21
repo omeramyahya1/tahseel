@@ -30,6 +30,11 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => "bytea",
 });
 
+// Read-only from the app's point of view (set by triggers).
+const xid8 = customType<{ data: string; driverData: string }>({
+  dataType: () => "xid8",
+});
+
 export const merchantStatus = pgEnum("merchant_status", [
   "active",
   "suspended",
@@ -141,6 +146,9 @@ export const ledgerJournals = pgTable(
     sourceId: text().notNull(),
     description: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    // Top-level transaction that created the journal, stamped by trigger.
+    // Postings may only be added by that same transaction (TL004).
+    createdXactId: xid8(),
   },
   (t) => [
     unique("ledger_journals_id_livemode_key").on(t.id, t.livemode),
@@ -377,6 +385,8 @@ export const idempotencyKeys = pgTable(
       .references(() => merchants.id),
     livemode: boolean().notNull(),
     key: text().notNull(),
+    // Identifies the request that currently owns the key (see http/idempotency.ts).
+    claimToken: uuid().notNull(),
     // SHA-256 of method, path and raw body: same key + different request = 422.
     requestHash: bytea().notNull(),
     status: idempotencyKeyStatus().notNull().default("in_progress"),

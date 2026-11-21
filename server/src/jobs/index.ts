@@ -7,6 +7,7 @@ export {
   fail,
   type Job,
   pruneDoneJobs,
+  release,
 } from "./queue";
 export {
   drain,

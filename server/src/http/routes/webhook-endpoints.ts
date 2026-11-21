@@ -128,19 +128,26 @@ export function webhookEndpointRoutes(deps: AppDeps) {
 
   app.openapi(routes.create, async (c) => {
     const body = c.req.valid("json");
-    const result = await idempotentTx(c, deps.db, 200, async (tx) => {
-      const { endpoint, secret } = await createWebhookEndpoint(
-        tx,
-        deps.webhooks,
-        {
-          ...scope(c),
-          url: body.url,
-          description: body.description ?? null,
-          enabledEvents: body.enabled_events,
-        },
-      );
-      return { ...presentWebhookEndpoint(endpoint), secret };
-    });
+    const result = await idempotentTx(
+      c,
+      deps,
+      200,
+      async (tx) => {
+        const { endpoint, secret } = await createWebhookEndpoint(
+          tx,
+          deps.webhooks,
+          {
+            ...scope(c),
+            url: body.url,
+            description: body.description ?? null,
+            enabledEvents: body.enabled_events,
+          },
+        );
+        return { ...presentWebhookEndpoint(endpoint), secret };
+      },
+      // Never store the signing secret in plaintext in idempotency_keys.
+      { secretFields: ["secret"] },
+    );
     return c.json(result, 200);
   });
 
