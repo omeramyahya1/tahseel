@@ -11,6 +11,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -221,5 +222,30 @@ export const jobs = pgTable(
     index("jobs_claim_idx")
       .on(t.queue, t.runAt)
       .where(sql`${t.status} IN ('pending', 'running')`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Events (append-only, range-partitioned by month on created_at)
+// ---------------------------------------------------------------------------
+// Drizzle can't declare partitioned tables; the generated migration is
+// edited by hand to add PARTITION BY (see migrations/0004_events.sql).
+
+export const events = pgTable(
+  "events",
+  {
+    id: uuid().notNull(),
+    type: text().notNull(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    data: jsonb().$type<{ object: Record<string, unknown> }>().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.createdAt, t.id] }),
+    index("events_id_idx").on(t.id),
+    index("events_merchant_idx").on(t.merchantId, t.livemode, t.createdAt),
   ],
 );
