@@ -26,13 +26,13 @@ docs/adr/     architecture decision records
 ## Requirements
 
 - Bun 1.4+
-- Docker (or Podman) with Compose, for local PostgreSQL 18
+- Podman with `podman-compose`, for local PostgreSQL 18
 
 ## Getting started
 
 ```sh
 bun install
-cp .env.example .env
+cp server/.env.example server/.env   # then fill in the keys (openssl rand -base64 32)
 bun run db:up
 bun run dev:api      # http://localhost:3000/health
 bun run dev:worker
@@ -47,6 +47,7 @@ bun run dev:web      # or dev:dashboard / dev:checkout / dev:ops
 | `bun run format`    | Biome format (write)                  |
 | `bun run typecheck` | Typecheck every workspace             |
 | `bun run build`     | Build every workspace                 |
+| `bun run test`      | Server tests (needs Postgres running) |
 | `bun run db:up`     | Start local Postgres                  |
 | `bun run db:down`   | Stop local Postgres                   |
 

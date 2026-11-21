@@ -59,7 +59,10 @@ Merchant onboarding and KYC belong in `apps/dashboard`, never in the public mark
 ## Stack
 
 - **Server:** Hono, postgres.js, Drizzle ORM, Drizzle Kit (migrations in `server/migrations`, schema in `server/src/db/schema.ts`), Zod v4. The plan is `@hono/zod-openapi` (code-first OpenAPI, which feeds the docs and the SDK).
-- **Database:** PostgreSQL 18 via `docker-compose.yml`.
+- **Database:** PostgreSQL 18 via `docker-compose.yml`, run with **Podman** (`podman compose`). The image comes from `public.ecr.aws/docker/library/postgres` because Docker Hub blob downloads return 403 from this network.
+- **Config:** env vars are validated in `server/src/env.ts`. Bun loads `.env` from the working directory, so the file lives at `server/.env` (template: `server/.env.example`).
+- **Crypto:** all key operations go through `KeyProvider` (`server/src/crypto/keys.ts`): HMAC for API keys, AES-256-GCM for stored secrets. It's env-backed today and is the seam for an HSM/KMS later.
+- **DB access:** `createDb()` and `withTx()` in `server/src/db/client.ts`. BIGINT comes back as `bigint`; `withTx` retries serialization and deadlock errors. Module functions take a `Db`/`Tx` argument instead of importing a singleton.
 - **Frontend:** React 19, Vite 8, Tailwind 4 (`@tailwindcss/vite`).
 - **Lint/format:** Biome (`biome.json`). Markdown is excluded from Biome. Two-space indent, double quotes.
 - **TypeScript:** 7 everywhere except `apps/web`, which pins TS 6 because `astro check` doesn't support TS 7. Shared strict settings in `tsconfig.base.json` (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`).
@@ -71,7 +74,8 @@ Run from the repo root unless noted.
 
 ```sh
 bun install
-bun run db:up / db:down               # local Postgres (Docker)
+bun run db:up / db:down               # local Postgres (Podman)
+bun run test                          # server tests (needs db:up)
 bun run dev:api | dev:worker | dev:web | dev:dashboard | dev:checkout | dev:ops
 bun run lint                          # Biome check; `bun run format` to write
 bun run typecheck                     # all workspaces
@@ -79,7 +83,9 @@ bun run build                         # all workspaces
 cd server && bun run db:generate | db:migrate | db:studio
 ```
 
-Before you call a change done, run `bun run lint` and `bun run typecheck`.
+Before you call a change done, run `bun run lint`, `bun run typecheck` and `bun run test`.
+
+Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
 
 ## Conventions
 
