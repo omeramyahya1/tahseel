@@ -78,6 +78,13 @@
       "when": 1795260183956,
       "tag": "0010_event_partition_truncate_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795260222242,
+      "tag": "0011_ledger_journal_xact_id",
+      "breakpoints": true
     }
   ]
 }

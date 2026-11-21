@@ -132,9 +132,11 @@ export async function getBalance(
 ): Promise<bigint> {
   const [row] = await db
     .select({
-      balance: sql<bigint>`coalesce(sum(${ledgerPostings.amount}), 0)::bigint`,
+      // SUM(bigint) is numeric; keep it as text so totals beyond the BIGINT
+      // range don't overflow before BigInt() parses them.
+      balance: sql<string>`coalesce(sum(${ledgerPostings.amount}), 0)::text`,
     })
     .from(ledgerPostings)
     .where(eq(ledgerPostings.accountId, accountId));
-  return BigInt(row?.balance ?? 0n);
+  return BigInt(row?.balance ?? 0);
 }

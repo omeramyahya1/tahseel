@@ -277,4 +277,67 @@ describe("database invariants", () => {
     });
     expect(row?.created_at).toEqual(row?.now);
   });
+
+  test("TL004 holds even when another transaction shares the same now()", async () => {
+    const { a, b } = await accounts();
+    const x = await t.sql.reserve();
+    try {
+      await x`begin`;
+      const [{ now } = { now: null }] = await x`select now()`;
+      // Another transaction creates a journal stamped with X's exact now()
+      // (triggers bypassed to forge it), and commits.
+      const jid = newId();
+      await t.sql.begin(async (sql) => {
+        await sql`set local session_replication_role = replica`;
+        await sql`insert into ledger_journals (id, kind, livemode, source_type, source_id, created_at, created_xact_id)
+                  values (${jid}, 'raw', false, 'raw', ${newId()}, ${now}, pg_current_xact_id())`;
+        await sql`insert into ledger_postings (id, journal_id, account_id, amount, currency, livemode)
+                  values (${newId()}, ${jid}, ${a.id}, 1, 'SDG', false),
+                         (${newId()}, ${jid}, ${b.id}, -1, 'SDG', false)`;
+      });
+      // X has the same now() but is a different transaction: rejected.
+      await expectSqlState(
+        x`insert into ledger_postings (id, journal_id, account_id, amount, currency, livemode)
+          values (${newId()}, ${jid}, ${a.id}, 5, 'SDG', false),
+                 (${newId()}, ${jid}, ${b.id}, -5, 'SDG', false)`,
+        "TL004",
+      );
+      await x`rollback`;
+    } finally {
+      x.release();
+    }
+  });
+
+  test("postings inside a savepoint of the creating transaction are allowed", async () => {
+    const m = await merchant();
+    await t.db.transaction(async (tx) => {
+      // Drizzle runs nested transactions as savepoints.
+      await tx.transaction((sp) => postJournal(sp, feeJournal(m, 7n)));
+    });
+    const receivable = await ensureAccount(
+      t.db,
+      chart.feesReceivable(m),
+      false,
+    );
+    expect(await getBalance(t.db, receivable.id)).toBe(7n);
+  });
+
+  test("balances beyond the BIGINT range are returned exactly", async () => {
+    const { a } = await accounts();
+    // A fresh account: fee_revenue is shared with the other tests.
+    const b = await ensureAccount(
+      t.db,
+      { code: `test_big:${newId()}`, type: "memo" },
+      false,
+    );
+    const big = 9_000_000_000_000_000_000n; // near BIGINT max (9.22e18)
+    for (let i = 0; i < 2; i++) {
+      await rawJournal([
+        { accountId: a.id, amount: big },
+        { accountId: b.id, amount: -big },
+      ]);
+    }
+    expect(await getBalance(t.db, a.id)).toBe(2n * big);
+    expect(await getBalance(t.db, b.id)).toBe(-2n * big);
+  });
 });
