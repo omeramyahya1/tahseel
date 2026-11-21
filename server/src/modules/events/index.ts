@@ -7,4 +7,5 @@ export {
   type PublishInput,
   pgEventBus,
 } from "./bus";
+export { eventJobHandlers } from "./handlers";
 export { ensureEventPartitions } from "./partitions";

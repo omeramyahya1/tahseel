@@ -16,6 +16,7 @@
     "create-merchant": "bun scripts/create-merchant.ts"
   },
   "dependencies": {
+    "@hono/zod-openapi": "^1.6.3",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.19",
     "postgres": "^4.1.1",

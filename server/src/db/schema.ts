@@ -359,3 +359,34 @@ export const paymentIntentTransitions = pgTable(
   },
   (t) => [index("payment_intent_transitions_intent_idx").on(t.paymentIntentId)],
 );
+
+// ---------------------------------------------------------------------------
+// Idempotency keys (public API)
+// ---------------------------------------------------------------------------
+
+export const idempotencyKeyStatus = pgEnum("idempotency_key_status", [
+  "in_progress",
+  "completed",
+]);
+
+export const idempotencyKeys = pgTable(
+  "idempotency_keys",
+  {
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    key: text().notNull(),
+    // SHA-256 of method, path and raw body: same key + different request = 422.
+    requestHash: bytea().notNull(),
+    status: idempotencyKeyStatus().notNull().default("in_progress"),
+    responseStatus: integer(),
+    responseBody: jsonb(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.merchantId, t.livemode, t.key] }),
+    index("idempotency_keys_created_at_idx").on(t.createdAt),
+  ],
+);

@@ -50,6 +50,13 @@
       "when": 1795252732016,
       "tag": "0006_payments_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795253031755,
+      "tag": "0007_idempotency_keys",
+      "breakpoints": true
     }
   ]
 }
