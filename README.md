@@ -53,6 +53,22 @@ bun run dev:web      # or dev:dashboard / dev:checkout / dev:ops
 
 Database migrations run from `server/`: `bun run db:generate`, `bun run db:migrate`.
 
+## Try a payment (test mode)
+
+With `dev:api` and `dev:worker` running, and a test key from `create-merchant` (below):
+
+```sh
+curl -s localhost:3000/v1/payment_intents -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"amount":150000,"currency":"SDG","description":"Order 1042"}'
+
+curl -s localhost:3000/v1/payment_intents/pi_.../confirm -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"payer":{"alias":"+249900000001"}}'
+```
+
+The simulated rail settles it about 2 s later. Test aliases: `+249900000001` succeeds, `+249900000002` declines, `+249900000003` never responds (expires), `+249900000004` is an unknown alias. The OpenAPI spec is at `/v1/openapi.json`.
+
 Create a merchant and its API keys (until the dashboard exists):
 
 ```sh
