@@ -8,6 +8,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -183,5 +184,42 @@ export const ledgerPostings = pgTable(
     }),
     index("ledger_postings_account_id_idx").on(t.accountId),
     index("ledger_postings_journal_id_idx").on(t.journalId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Jobs (outbox + work queue)
+// ---------------------------------------------------------------------------
+
+export const jobStatus = pgEnum("job_status", [
+  "pending",
+  "running",
+  "done",
+  "dead",
+]);
+
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid().primaryKey(),
+    queue: text().notNull(),
+    kind: text().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    status: jobStatus().notNull().default("pending"),
+    runAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    attempts: integer().notNull().default(0),
+    maxAttempts: integer().notNull().default(10),
+    lockedUntil: timestamp({ withTimezone: true }),
+    lastError: text(),
+    // Optional: enqueueing twice with the same key is a no-op.
+    dedupeKey: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("jobs_dedupe_key_key").on(t.dedupeKey),
+    index("jobs_claim_idx")
+      .on(t.queue, t.runAt)
+      .where(sql`${t.status} IN ('pending', 'running')`),
   ],
 );
