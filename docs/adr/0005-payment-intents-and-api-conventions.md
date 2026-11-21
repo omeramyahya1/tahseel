@@ -4,7 +4,7 @@ Date: 2026-11-21
 
 ## Status
 
-Accepted
+Accepted. Idempotency takeover amended by ADR 0007.
 
 ## Context
 

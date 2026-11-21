@@ -47,7 +47,7 @@ See `docs/adr/0002-initial-architecture.md`.
 ### Ledger (`server/src/modules/ledger/`, ADR 0003)
 
 - Append-only `ledger_accounts`, `ledger_journals` and `ledger_postings`. Amounts are signed `BIGINT` (debit +, credit −). Balances are always derived (`SUM`); there are no stored balance rows and no account locks.
-- The DB enforces the invariants in `server/migrations/0001_ledger_invariants.sql`: `TL001` append-only, `TL002` ≥2 postings, `TL003` balanced per currency at commit, `TL004` postings only in the journal's own transaction. Composite FKs block cross-mode and cross-currency postings, and a CHECK makes the database SDG-only.
+- The DB enforces the invariants in `server/migrations/0001_ledger_invariants.sql` and `0011_ledger_journal_xact_id.sql`: `TL001` append-only, `TL002` ≥2 postings, `TL003` balanced per currency at commit, `TL004` postings only in the journal's own transaction (checked by `created_xact_id = pg_current_xact_id()`). Composite FKs block cross-mode and cross-currency postings, and a CHECK makes the database SDG-only.
 - Always post through `postJournal(tx, …)` inside the same transaction as the business state change. It's idempotent per `(source_type, source_id, kind)`. Corrections are new reversing journals, never edits.
 - Accounts come from `chart` (`chart.ts`): memo `rail_inflow:{rail}` and `merchant_collected:{merchant}`, asset `fees_receivable:{merchant}`, revenue `fee_revenue`. Each exists separately per test/live mode.
 - Hand-written SQL (triggers, functions) goes in custom migrations: `bunx drizzle-kit generate --custom --name <name>`.
@@ -58,6 +58,7 @@ See `docs/adr/0002-initial-architecture.md`.
 ### Jobs and events (`server/src/jobs/`, `server/src/modules/events/`)
 
 - `enqueue(tx, …)` writes a job **in the caller's transaction** (outbox). Workers claim with `SKIP LOCKED`. Delivery is at-least-once, so **handlers must be idempotent**. Use `dedupeKey` for one-per-thing jobs.
+- Acks (`complete`/`fail`/`release`) take the claimed job and only apply to that claim generation (`status = 'running'` and the same `attempts`). Never ack by ID alone.
 - Failures retry with exponential backoff and go `dead` after `max_attempts`. Throw `RetryLater(seconds)` to choose the delay. Use `drain(db, queue, handlers)` in tests.
 - Publish events only through `EventBus.publish(tx, …)` in the same transaction as the change. It writes to `events` (monthly partitions + `events_default`) and a `dispatch_event` job, which the webhooks module fans out to endpoints. `data.object` is the public API representation, and `presentEvent()` is the event's public form (also the webhook body).
 - **Timestamp precision:** Postgres `timestamptz` is microseconds and a JS `Date` is milliseconds. Never compare a DB timestamp after it has round-tripped through JS (cursors, composite keys). Compare in SQL against the row, as `listEvents()` does.
@@ -68,6 +69,8 @@ See `docs/adr/0002-initial-architecture.md`.
 - Delivery: signed `POST` with `Tahseel-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "t.body")>`. 10 s timeout, only 2xx succeeds, redirects aren't followed. Retries follow `RETRY_SCHEDULE_SECONDS` (13 attempts, about 2.7 days), then `failed`. Attempts are logged append-only.
 - **SSRF:** every webhook URL goes through `checkUrlSyntax` + `checkUrlTarget` at creation **and before each delivery**: https in live mode, and no private, loopback or link-local targets (also after DNS). `WEBHOOK_ALLOW_PRIVATE_URLS=true` is for local dev only. DNS rebinding is still open: an egress proxy or IP pinning is needed before production.
 - Queues: `events` (dispatch) and `webhooks` (delivery, concurrency 20), so slow merchant endpoints never block rails.
+- `createWebhookEndpoint(tx, …)` needs a transaction: the per-mode limit uses a transaction-scoped advisory lock. Response bodies are read up to 1 KB, then the stream is cancelled.
+- Every events partition carries its own TRUNCATE guard: `ensure_event_partitions()` adds it via `guard_event_partitions()`. Statement triggers on the parent don't cover partitions.
 
 ### Payments (`server/src/modules/payments/`, `server/src/connectors/`, ADR 0005)
 

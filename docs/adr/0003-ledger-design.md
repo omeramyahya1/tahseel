@@ -4,7 +4,7 @@ Date: 2026-11-21
 
 ## Status
 
-Accepted
+Accepted. TL004 mechanism amended by ADR 0007.
 
 ## Context
 
