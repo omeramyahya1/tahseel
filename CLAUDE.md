@@ -141,7 +141,7 @@ cd server && bun run create-merchant --name … --bank-code … --account …
 
 Before you call a change done, run `bun run lint`, `bun run typecheck` and `bun run test`.
 
-Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()`, `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant) `testPaymentsDeps()` (the simulated rail responds immediately) and `testAppDeps()` (full app deps, with webhooks allowed to hit localhost receivers). HTTP tests use `Bun.serve({ port: 0 })` as a webhook receiver. Use `must()` from `server/test/assert.ts` instead of `!`. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
+Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once per run (unique name, so concurrent runs are safe, and dropped at the end), and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. List-order assertions must sort IDs, not assume insertion order: same-millisecond ULIDs have random suffixes. `server/test/fixtures.ts` provides `testKeys()`, `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant) `testPaymentsDeps()` (the simulated rail responds immediately) and `testAppDeps()` (full app deps, with webhooks allowed to hit localhost receivers). HTTP tests use `Bun.serve({ port: 0 })` as a webhook receiver. Use `must()` from `server/test/assert.ts` instead of `!`. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
 
 ## Conventions
 

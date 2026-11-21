@@ -336,17 +336,18 @@ describe("scoping", () => {
     for (let i = 0; i < 5; i++) ids.push((await create(100n, {}, s)).intent.id);
     await create(100n, {}, scope(m, true)); // other mode: not listed
 
+    // Expected order is by ID, descending: IDs created in the same
+    // millisecond have random suffixes, so insertion order isn't ID order.
+    const sorted = [...ids].sort().reverse();
     const page1 = await listPaymentIntents(t.db, s, { limit: 3 });
-    expect(page1.data.map((r) => r.intent.id)).toEqual(ids.slice(2).reverse());
+    expect(page1.data.map((r) => r.intent.id)).toEqual(sorted.slice(0, 3));
     expect(page1.hasMore).toBe(true);
 
     const page2 = await listPaymentIntents(t.db, s, {
       limit: 3,
       startingAfter: must(page1.data.at(-1)).intent.id,
     });
-    expect(page2.data.map((r) => r.intent.id)).toEqual(
-      ids.slice(0, 2).reverse(),
-    );
+    expect(page2.data.map((r) => r.intent.id)).toEqual(sorted.slice(3));
     expect(page2.hasMore).toBe(false);
   });
 });
