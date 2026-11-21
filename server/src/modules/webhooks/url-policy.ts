@@ -45,16 +45,57 @@ function isBlockedV4(ip: string): boolean {
   });
 }
 
+/** Expands an IPv6 address (any notation, optional brackets) to 8 16-bit words. */
+function expandIPv6(raw: string): number[] | null {
+  let ip = raw.toLowerCase().replace(/^\[|\]$/g, "");
+  const zone = ip.indexOf("%");
+  if (zone >= 0) ip = ip.slice(0, zone);
+  // A trailing dotted IPv4 becomes two hex words.
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number) as [
+      number,
+      number,
+      number,
+      number,
+    ];
+    ip = `${ip.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = ip.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 0) return null;
+  const words = [...head, ...Array(missing).fill("0"), ...tail].map((w) =>
+    Number.parseInt(w, 16),
+  );
+  return words.length === 8 && words.every((w) => w >= 0 && w <= 0xffff)
+    ? words
+    : null;
+}
+
 /** True for loopback, private, link-local, multicast and other non-public addresses. */
 export function isPrivateAddress(ip: string): boolean {
   const family = isIP(ip);
   if (family === 4) return isBlockedV4(ip);
   if (family !== 6) return true; // not an IP: refuse
-  const v6 = ip.toLowerCase().replace(/^\[|\]$/g, "");
-  if (v6 === "::" || v6 === "::1") return true;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
-  if (mapped?.[1]) return isBlockedV4(mapped[1]);
-  const first = Number.parseInt(v6.split(":")[0] || "0", 16);
+  const words = expandIPv6(ip);
+  if (!words) return true;
+  if (words.every((w) => w === 0)) return true; // ::
+  if (words.slice(0, 7).every((w) => w === 0) && words[7] === 1) return true; // ::1
+  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d), in either
+  // dotted or hex form: WHATWG URL rewrites [::ffff:127.0.0.1] to
+  // [::ffff:7f00:1], so both must be checked as the embedded IPv4.
+  if (
+    words.slice(0, 5).every((w) => w === 0) &&
+    (words[5] === 0xffff || words[5] === 0)
+  ) {
+    const hi = words[6] ?? 0;
+    const lo = words[7] ?? 0;
+    return isBlockedV4(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+  }
+  const first = words[0] ?? 0;
   if ((first & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
   if ((first & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
   if ((first & 0xff00) === 0xff00) return true; // ff00::/8 multicast

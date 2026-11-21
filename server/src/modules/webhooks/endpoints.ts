@@ -1,6 +1,6 @@
-import { and, count, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, count, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { KeyProvider } from "../../crypto/keys";
-import type { DbOrTx } from "../../db/client";
+import type { DbOrTx, Tx } from "../../db/client";
 import { webhookEndpoints } from "../../db/schema";
 import { newId, toPublicId } from "../../lib/ids";
 import { WebhookError } from "./errors";
@@ -31,9 +31,13 @@ const active = (scope: Scope) =>
     isNull(webhookEndpoints.deletedAt),
   );
 
-/** Creates an endpoint. The signing secret is returned once. */
+/**
+ * Creates an endpoint. The signing secret is returned once. Takes a
+ * transaction: the per-mode limit is enforced under a transaction-scoped
+ * advisory lock, so concurrent creates can't exceed it.
+ */
 export async function createWebhookEndpoint(
-  db: DbOrTx,
+  tx: Tx,
   deps: { keys: KeyProvider; urlPolicy: UrlPolicy },
   input: Scope & {
     url: string;
@@ -46,7 +50,11 @@ export async function createWebhookEndpoint(
     (await checkUrlTarget(input.url, deps.urlPolicy));
   if (problem) throw new WebhookError("url_invalid", `url ${problem}.`, "url");
 
-  const [existing] = await db
+  // Serializes count + insert per (merchant, mode). Held until commit.
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`webhook_endpoints:${input.merchantId}:${input.livemode}`}, 0))`,
+  );
+  const [existing] = await tx
     .select({ n: count() })
     .from(webhookEndpoints)
     .where(active(input));
@@ -58,7 +66,7 @@ export async function createWebhookEndpoint(
   }
 
   const secret = generateWebhookSecret();
-  const [endpoint] = await db
+  const [endpoint] = await tx
     .insert(webhookEndpoints)
     .values({
       id: newId(),

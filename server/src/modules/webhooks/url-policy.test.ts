@@ -88,4 +88,25 @@ describe("checkUrlTarget", () => {
       await checkUrlTarget("http://localhost:4000/x", { allowPrivate: true }),
     ).toBeNull();
   });
+
+  test("IPv4-mapped/compatible IPv6 is checked as the embedded IPv4 (dotted and hex)", async () => {
+    const policy = { allowPrivate: false };
+    for (const url of [
+      "http://[::ffff:127.0.0.1]/x", // URL rewrites this to [::ffff:7f00:1]
+      "http://[::ffff:7f00:1]/x",
+      "http://[::ffff:a00:1]/x", // 10.0.0.1
+      "http://[::ffff:a9fe:a9fe]/x", // 169.254.169.254 (metadata)
+      "http://[::ffff:c0a8:101]/x", // 192.168.1.1
+      "http://[::7f00:1]/x", // IPv4-compatible loopback
+      "http://[0:0:0:0:0:ffff:7f00:1]/x",
+    ]) {
+      expect(await checkUrlTarget(url, policy)).not.toBeNull();
+    }
+    for (const url of [
+      "https://[2001:4860:4860::8888]/x",
+      "https://[::ffff:808:808]/x", // 8.8.8.8
+    ]) {
+      expect(await checkUrlTarget(url, policy)).toBeNull();
+    }
+  });
 });
