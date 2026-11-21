@@ -1,0 +1,30 @@
+{
+  "name": "tahseel",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "server"
+  ],
+  "scripts": {
+    "dev:web": "bun --filter @tahseel/web dev",
+    "dev:dashboard": "bun --filter @tahseel/dashboard dev",
+    "dev:checkout": "bun --filter @tahseel/checkout dev",
+    "dev:ops": "bun --filter @tahseel/ops dev",
+    "dev:api": "bun --filter @tahseel/server dev:api",
+    "dev:worker": "bun --filter @tahseel/server dev:worker",
+    "build": "bun --filter '*' build",
+    "typecheck": "bun --filter '*' typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@types/bun": "^1.4.5",
+    "typescript": "^7.0.2"
+  }
+}
