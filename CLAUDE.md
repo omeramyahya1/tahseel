@@ -59,7 +59,15 @@ See `docs/adr/0002-initial-architecture.md`.
 
 - `enqueue(tx, …)` writes a job **in the caller's transaction** (outbox). Workers claim with `SKIP LOCKED`. Delivery is at-least-once, so **handlers must be idempotent**. Use `dedupeKey` for one-per-thing jobs.
 - Failures retry with exponential backoff and go `dead` after `max_attempts`. Throw `RetryLater(seconds)` to choose the delay. Use `drain(db, queue, handlers)` in tests.
-- Publish events only through `EventBus.publish(tx, …)` in the same transaction as the change. It writes to `events` (monthly partitions + `events_default`) and a `dispatch_event` job. `data.object` is the public API representation.
+- Publish events only through `EventBus.publish(tx, …)` in the same transaction as the change. It writes to `events` (monthly partitions + `events_default`) and a `dispatch_event` job, which the webhooks module fans out to endpoints. `data.object` is the public API representation, and `presentEvent()` is the event's public form (also the webhook body).
+- **Timestamp precision:** Postgres `timestamptz` is microseconds and a JS `Date` is milliseconds. Never compare a DB timestamp after it has round-tripped through JS (cursors, composite keys). Compare in SQL against the row, as `listEvents()` does.
+
+### Webhooks (`server/src/modules/webhooks/`, ADR 0006)
+
+- Endpoints (`we_`) hold `enabled_events` (types or `*`) and an encrypted `whsec_` secret, returned once. Delete is soft. At most 16 per merchant per mode.
+- Delivery: signed `POST` with `Tahseel-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "t.body")>`. 10 s timeout, only 2xx succeeds, redirects aren't followed. Retries follow `RETRY_SCHEDULE_SECONDS` (13 attempts, about 2.7 days), then `failed`. Attempts are logged append-only.
+- **SSRF:** every webhook URL goes through `checkUrlSyntax` + `checkUrlTarget` at creation **and before each delivery**: https in live mode, and no private, loopback or link-local targets (also after DNS). `WEBHOOK_ALLOW_PRIVATE_URLS=true` is for local dev only. DNS rebinding is still open: an egress proxy or IP pinning is needed before production.
+- Queues: `events` (dispatch) and `webhooks` (delivery, concurrency 20), so slow merchant endpoints never block rails.
 
 ### Payments (`server/src/modules/payments/`, `server/src/connectors/`, ADR 0005)
 
@@ -81,7 +89,8 @@ See `docs/adr/0002-initial-architecture.md`.
 - `createApp({ db, keys })` builds the Hono app. `api.ts` only loads env and serves it, and tests call `app.request(...)` directly.
 - Errors always use the Stripe-style envelope `{ error: { type, code, message, param? } }`: throw `ApiError(status, type, code, message, param?)`. Unknown routes return a JSON 404.
 - Everything under `/v1` goes through `requireApiKey`, then `idempotency`. Handlers read `c.var.merchant`, `c.var.livemode` and `c.var.apiKey`, and **every query must be scoped by `(merchant_id, livemode)`**.
-- Routes use `@hono/zod-openapi` (`createRoute` + `app.openapi`) with schemas in `http/schemas.ts`. Import `z` from `@hono/zod-openapi` there. The public spec is served at `/v1/openapi.json`.
+- Endpoints: `/v1/payment_intents` (create, retrieve, list, confirm, cancel), `/v1/events` (retrieve, list), `/v1/webhook_endpoints` (create, retrieve, list, delete).
+- Routes use `@hono/zod-openapi` (`createRoute` + `app.openapi`) with schemas in `http/schemas.ts` and shared `security`/`errorResponses`/`ok` in `http/routes/common.ts`. Import `z` from `@hono/zod-openapi` there. The public spec is served at `/v1/openapi.json`.
 - **Every POST requires `Idempotency-Key`.** State-changing handlers must wrap their work in `idempotentTx(c, db, status, tx => …)`, which stores the response in the same transaction.
 - API conventions: amounts are integers (piasters), timestamps are ISO 8601 UTC, lists are `{ object: "list", data, has_more }` with `limit` and `starting_after`, and `currency` is `"SDG"`.
 - Map domain errors to HTTP in `http/errors.ts` (`toApiError`), not in handlers.
@@ -106,7 +115,7 @@ Merchant onboarding and KYC belong in `apps/dashboard`, never in the public mark
 
 - **Server:** Hono, postgres.js, Drizzle ORM, Drizzle Kit (migrations in `server/migrations`, schema in `server/src/db/schema.ts`), Zod v4. The plan is `@hono/zod-openapi` (code-first OpenAPI, which feeds the docs and the SDK).
 - **Database:** PostgreSQL 18 via `docker-compose.yml`, run with **Podman** (`podman compose`). The image comes from `public.ecr.aws/docker/library/postgres` because Docker Hub blob downloads return 403 from this network.
-- **Config:** env vars are validated in `server/src/env.ts`. Bun loads `.env` from the working directory, so the file lives at `server/.env` (template: `server/.env.example`).
+- **Config:** env vars are validated in `server/src/env.ts`. Bun loads `.env` from the working directory, so the file lives at `server/.env` (template: `server/.env.example`). Vars: `DATABASE_URL`, `API_PORT`, `API_KEY_PEPPER`, `SECRETS_ENCRYPTION_KEY`, `WEBHOOK_ALLOW_PRIVATE_URLS` (dev only), `TEST_DATABASE_ADMIN_URL` (tests).
 - **Crypto:** all key operations go through `KeyProvider` (`server/src/crypto/keys.ts`): HMAC for API keys, AES-256-GCM for stored secrets. It's env-backed today and is the seam for an HSM/KMS later.
 - **DB access:** `createDb()` and `withTx()` in `server/src/db/client.ts`. BIGINT comes back as `bigint`; `withTx` retries serialization and deadlock errors. Module functions take a `Db`/`Tx` argument instead of importing a singleton.
 - **Frontend:** React 19, Vite 8, Tailwind 4 (`@tailwindcss/vite`).
@@ -132,7 +141,7 @@ cd server && bun run create-merchant --name … --bank-code … --account …
 
 Before you call a change done, run `bun run lint`, `bun run typecheck` and `bun run test`.
 
-Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()`, `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant) and `testPaymentsDeps()` (the simulated rail responds immediately). Use `must()` from `server/test/assert.ts` instead of `!`. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
+Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()`, `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant) `testPaymentsDeps()` (the simulated rail responds immediately) and `testAppDeps()` (full app deps, with webhooks allowed to hit localhost receivers). HTTP tests use `Bun.serve({ port: 0 })` as a webhook receiver. Use `must()` from `server/test/assert.ts` instead of `!`. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
 
 ## Conventions
 

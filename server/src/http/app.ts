@@ -3,12 +3,20 @@ import { Hono } from "hono";
 import type { KeyProvider } from "../crypto/keys";
 import type { Db } from "../db/client";
 import type { PaymentsDeps } from "../modules/payments";
+import type { WebhookDeps } from "../modules/webhooks";
 import { requireApiKey } from "./auth";
 import { onError, onNotFound } from "./errors";
 import { type IdempotencyVariables, idempotency } from "./idempotency";
+import { eventRoutes } from "./routes/events";
 import { paymentIntentRoutes } from "./routes/payment-intents";
+import { webhookEndpointRoutes } from "./routes/webhook-endpoints";
 
-export type AppDeps = { db: Db; keys: KeyProvider; payments: PaymentsDeps };
+export type AppDeps = {
+  db: Db;
+  keys: KeyProvider;
+  payments: PaymentsDeps;
+  webhooks: WebhookDeps;
+};
 
 export type ApiEnv = { Variables: IdempotencyVariables };
 
@@ -31,6 +39,8 @@ export function createApp(deps: AppDeps) {
     description: "Your secret key: `sk_test_…` or `sk_live_…`.",
   });
   v1.route("/", paymentIntentRoutes(deps));
+  v1.route("/", eventRoutes(deps));
+  v1.route("/", webhookEndpointRoutes(deps));
 
   // The spec is public (no API key), so it's registered before /v1 auth.
   app.get("/v1/openapi.json", (c) =>

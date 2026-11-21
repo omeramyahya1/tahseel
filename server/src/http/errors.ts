@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { ZodError } from "zod";
 import { PaymentError, type PaymentErrorCode } from "../modules/payments";
+import { WebhookError, type WebhookErrorCode } from "../modules/webhooks";
 
 // Stripe-style error envelope: { error: { type, code, message, param? } }.
 
@@ -47,8 +48,23 @@ const PAYMENT_ERRORS: Record<
   rail_unavailable: [503, "api_error"],
 };
 
+const WEBHOOK_ERRORS: Record<WebhookErrorCode, ContentfulStatusCode> = {
+  webhook_endpoint_not_found: 404,
+  url_invalid: 400,
+  too_many_webhook_endpoints: 400,
+};
+
 export function toApiError(err: unknown): ApiError | null {
   if (err instanceof ApiError) return err;
+  if (err instanceof WebhookError) {
+    return new ApiError(
+      WEBHOOK_ERRORS[err.code],
+      "invalid_request_error",
+      err.code,
+      err.message,
+      err.param,
+    );
+  }
   if (err instanceof PaymentError) {
     const [status, type] = PAYMENT_ERRORS[err.code];
     return new ApiError(status, type, err.code, err.message);

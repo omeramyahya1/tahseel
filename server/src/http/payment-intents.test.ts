@@ -3,6 +3,7 @@ import { must } from "../../test/assert";
 import { createTestDb } from "../../test/db";
 import {
   createTestMerchant,
+  testAppDeps,
   testKeys,
   testPaymentsDeps,
 } from "../../test/fixtures";
@@ -26,7 +27,7 @@ let liveKey: string;
 beforeAll(async () => {
   t = await createTestDb();
   deps = testPaymentsDeps(t.db);
-  app = createApp({ db: t.db, keys, payments: deps });
+  app = createApp({ ...testAppDeps(t.db, keys), payments: deps });
   merchant = await createTestMerchant(t.db, {
     pricing: { feeBps: 100, feeFixed: 0n, feeMin: null, feeMax: null },
   });
@@ -369,12 +370,14 @@ describe("OpenAPI", () => {
     expect(res.status).toBe(200);
     const doc = (await res.json()) as Json;
     expect(doc.openapi).toBe("3.1.0");
-    expect(Object.keys(doc.paths).sort()).toEqual([
-      "/payment_intents",
-      "/payment_intents/{id}",
-      "/payment_intents/{id}/cancel",
-      "/payment_intents/{id}/confirm",
-    ]);
+    expect(Object.keys(doc.paths)).toEqual(
+      expect.arrayContaining([
+        "/payment_intents",
+        "/payment_intents/{id}",
+        "/payment_intents/{id}/cancel",
+        "/payment_intents/{id}/confirm",
+      ]),
+    );
     expect(doc.components.securitySchemes.bearerAuth.scheme).toBe("bearer");
     expect(doc.components.schemas.PaymentIntent).toBeDefined();
   });

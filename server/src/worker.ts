@@ -1,27 +1,34 @@
-// Background worker: outbox relay (event dispatch), rail queues and
-// periodic maintenance. Run one or more; every job and task is safe to
+// Background worker: outbox relay (event fan-out to webhooks), webhook
+// delivery, rail queues and periodic maintenance. Run one or more; every job and task is safe to
 // run concurrently.
 
 import { railQueue, SIMULATED_RAIL } from "./connectors";
 import { loadEnv } from "./env";
 import { pruneIdempotencyKeys } from "./http/idempotency";
 import { pruneDoneJobs, startQueue } from "./jobs";
-import {
-  EVENTS_QUEUE,
-  ensureEventPartitions,
-  eventJobHandlers,
-} from "./modules/events";
+import { EVENTS_QUEUE, ensureEventPartitions } from "./modules/events";
 import { expireDuePaymentIntents, railJobHandlers } from "./modules/payments";
+import {
+  eventDispatchHandlers,
+  WEBHOOKS_QUEUE,
+  webhookJobHandlers,
+} from "./modules/webhooks";
 import { createRuntime } from "./runtime";
 
 const env = loadEnv();
-const { db, sql, payments } = createRuntime(env);
+const { db, sql, payments, webhooks } = createRuntime(env);
 
 const queues = [
   startQueue(db, {
     queue: EVENTS_QUEUE,
     concurrency: 10,
-    handlers: eventJobHandlers(),
+    handlers: eventDispatchHandlers(db),
+  }),
+  // Slow merchant endpoints only tie up this queue.
+  startQueue(db, {
+    queue: WEBHOOKS_QUEUE,
+    concurrency: 20,
+    handlers: webhookJobHandlers(db, webhooks),
   }),
   // One queue per rail: a slow or failing rail never blocks another.
   startQueue(db, {

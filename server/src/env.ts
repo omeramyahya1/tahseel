@@ -13,6 +13,8 @@ const Env = z.object({
   API_PORT: z.coerce.number().int().positive().default(3000),
   API_KEY_PEPPER: base64Key(32),
   SECRETS_ENCRYPTION_KEY: base64Key(32),
+  // Development only: lets webhooks target localhost/private networks.
+  WEBHOOK_ALLOW_PRIVATE_URLS: z.stringbool().default(false),
 });
 
 export type Env = z.infer<typeof Env>;
