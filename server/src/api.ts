@@ -1,6 +1,9 @@
 import { Hono } from "hono";
-import { sql } from "./db/client";
-import { env } from "./env";
+import { createDb } from "./db/client";
+import { loadEnv } from "./env";
+
+const env = loadEnv();
+const { sql } = createDb(env.DATABASE_URL);
 
 const app = new Hono();
 

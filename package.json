@@ -19,8 +19,9 @@
     "typecheck": "bun --filter '*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "db:up": "docker compose up -d postgres",
-    "db:down": "docker compose down"
+    "db:up": "podman compose up -d postgres",
+    "db:down": "podman compose down",
+    "test": "bun --filter @tahseel/server test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
