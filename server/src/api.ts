@@ -1,16 +1,11 @@
-import { createEnvKeyProvider } from "./crypto/keys";
-import { createDb } from "./db/client";
 import { loadEnv } from "./env";
 import { createApp } from "./http/app";
+import { createRuntime } from "./runtime";
 
 const env = loadEnv();
-const { db } = createDb(env.DATABASE_URL);
-const keys = createEnvKeyProvider({
-  apiKeyPepper: env.API_KEY_PEPPER,
-  secretsEncryptionKey: env.SECRETS_ENCRYPTION_KEY,
-});
+const { db, keys, payments } = createRuntime(env);
 
-const app = createApp({ db, keys });
+const app = createApp({ db, keys, payments });
 
 export default {
   port: env.API_PORT,

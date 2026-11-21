@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { createEnvKeyProvider } from "../src/crypto/keys";
-import type { DbOrTx } from "../src/db/client";
+import type { Db, DbOrTx } from "../src/db/client";
 import { newId } from "../src/lib/ids";
 import {
   type CreateMerchantInput,
   createMerchant,
 } from "../src/modules/merchants";
+import { createPaymentsDeps } from "../src/runtime";
 
 export function testKeys() {
   return createEnvKeyProvider({
@@ -24,4 +25,9 @@ export function createTestMerchant(
     creditorAccount: "0000000000000001",
     ...overrides,
   });
+}
+
+/** Payments deps with the simulated rail responding immediately. */
+export function testPaymentsDeps(db: Db) {
+  return createPaymentsDeps(db, { simulatedResponseDelayMs: 0 });
 }

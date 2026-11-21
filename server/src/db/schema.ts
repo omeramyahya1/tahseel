@@ -8,8 +8,10 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -183,5 +185,208 @@ export const ledgerPostings = pgTable(
     }),
     index("ledger_postings_account_id_idx").on(t.accountId),
     index("ledger_postings_journal_id_idx").on(t.journalId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Jobs (outbox + work queue)
+// ---------------------------------------------------------------------------
+
+export const jobStatus = pgEnum("job_status", [
+  "pending",
+  "running",
+  "done",
+  "dead",
+]);
+
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid().primaryKey(),
+    queue: text().notNull(),
+    kind: text().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    status: jobStatus().notNull().default("pending"),
+    runAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    attempts: integer().notNull().default(0),
+    maxAttempts: integer().notNull().default(10),
+    lockedUntil: timestamp({ withTimezone: true }),
+    lastError: text(),
+    // Optional: enqueueing twice with the same key is a no-op.
+    dedupeKey: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("jobs_dedupe_key_key").on(t.dedupeKey),
+    index("jobs_claim_idx")
+      .on(t.queue, t.runAt)
+      .where(sql`${t.status} IN ('pending', 'running')`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Events (append-only, range-partitioned by month on created_at)
+// ---------------------------------------------------------------------------
+// Drizzle can't declare partitioned tables; the generated migration is
+// edited by hand to add PARTITION BY (see migrations/0004_events.sql).
+
+export const events = pgTable(
+  "events",
+  {
+    id: uuid().notNull(),
+    type: text().notNull(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    data: jsonb().$type<{ object: Record<string, unknown> }>().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.createdAt, t.id] }),
+    index("events_id_idx").on(t.id),
+    index("events_merchant_idx").on(t.merchantId, t.livemode, t.createdAt),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+// State machine and immutable columns are enforced by triggers in
+// migrations/0006_payments_invariants.sql (mirrors modules/payments/status.ts).
+
+export const paymentIntentStatus = pgEnum("payment_intent_status", [
+  "requires_confirmation",
+  "processing",
+  "succeeded",
+  "canceled",
+  "expired",
+]);
+
+export const paymentAttemptStatus = pgEnum("payment_attempt_status", [
+  "pending", // created, request-to-pay not yet accepted by the rail
+  "sent", // rail accepted the request-to-pay; awaiting the payer
+  "succeeded",
+  "declined",
+  "expired",
+]);
+
+export const paymentIntents = pgTable(
+  "payment_intents",
+  {
+    id: uuid().primaryKey(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    amount: bigint({ mode: "bigint" }).notNull(),
+    currency: char({ length: 3 }).notNull(),
+    status: paymentIntentStatus().notNull(),
+    description: text(),
+    merchantReference: text(),
+    metadata: jsonb().$type<Record<string, string>>().notNull(),
+    // Latest confirm attempt; FK added in the custom migration (circular).
+    latestAttemptId: uuid(),
+    // Accrued fee, set when the payment succeeds.
+    fee: bigint({ mode: "bigint" }),
+    lastPaymentError: jsonb().$type<{ code: string; message: string }>(),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    succeededAt: timestamp({ withTimezone: true }),
+    canceledAt: timestamp({ withTimezone: true }),
+    expiredAt: timestamp({ withTimezone: true }),
+    reconciledAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("payment_intents_amount_positive", sql`${t.amount} > 0`),
+    check("payment_intents_currency_sdg", sql`${t.currency} = 'SDG'`),
+    check(
+      "payment_intents_fee_range",
+      sql`${t.fee} IS NULL OR (${t.fee} >= 0 AND ${t.fee} <= ${t.amount})`,
+    ),
+    check(
+      "payment_intents_expires_after_created",
+      sql`${t.expiresAt} > ${t.createdAt}`,
+    ),
+    index("payment_intents_merchant_list_idx").on(
+      t.merchantId,
+      t.livemode,
+      t.id,
+    ),
+    index("payment_intents_expiry_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'requires_confirmation'`),
+  ],
+);
+
+export const paymentAttempts = pgTable(
+  "payment_attempts",
+  {
+    id: uuid().primaryKey(),
+    paymentIntentId: uuid()
+      .notNull()
+      .references(() => paymentIntents.id),
+    livemode: boolean().notNull(),
+    rail: text().notNull(),
+    payerAlias: text().notNull(),
+    status: paymentAttemptStatus().notNull().default("pending"),
+    railReference: text(),
+    failureCode: text(),
+    failureMessage: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("payment_attempts_rail_reference_key").on(t.rail, t.railReference),
+    index("payment_attempts_intent_idx").on(t.paymentIntentId),
+  ],
+);
+
+export const paymentIntentTransitions = pgTable(
+  "payment_intent_transitions",
+  {
+    id: uuid().primaryKey(),
+    paymentIntentId: uuid()
+      .notNull()
+      .references(() => paymentIntents.id),
+    fromStatus: paymentIntentStatus(),
+    toStatus: paymentIntentStatus().notNull(),
+    attemptId: uuid().references(() => paymentAttempts.id),
+    reason: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("payment_intent_transitions_intent_idx").on(t.paymentIntentId)],
+);
+
+// ---------------------------------------------------------------------------
+// Idempotency keys (public API)
+// ---------------------------------------------------------------------------
+
+export const idempotencyKeyStatus = pgEnum("idempotency_key_status", [
+  "in_progress",
+  "completed",
+]);
+
+export const idempotencyKeys = pgTable(
+  "idempotency_keys",
+  {
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    key: text().notNull(),
+    // SHA-256 of method, path and raw body: same key + different request = 422.
+    requestHash: bytea().notNull(),
+    status: idempotencyKeyStatus().notNull().default("in_progress"),
+    responseStatus: integer(),
+    responseBody: jsonb(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.merchantId, t.livemode, t.key] }),
+    index("idempotency_keys_created_at_idx").on(t.createdAt),
   ],
 );

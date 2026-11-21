@@ -40,7 +40,8 @@ See `docs/adr/0002-initial-architecture.md`.
 - `server/` is a modular monolith with two entrypoints: `src/api.ts` (public API and app backends) and `src/worker.ts` (outbox relay, webhooks, notifications, reconciliation, rail polling).
 - Modules in `server/src/modules/` (payments, ledger, merchants, risk) don't reach into each other's tables.
 - Event-driven on Postgres: transactional outbox, `SELECT … FOR UPDATE SKIP LOCKED` job queue, partitioned append-only event log, all behind an `EventBus` interface. No external broker yet.
-- Each rail connector in `server/src/connectors/` implements one interface and gets its own queue, concurrency limit and circuit breaker.
+- `server/src/runtime.ts` is the composition root (db, keys, payments deps with the rail registry) shared by `api.ts` and `worker.ts`.
+- Each rail connector in `server/src/connectors/` implements `RailConnector` and gets its own queue (`rail:<name>`) and concurrency limit. Circuit breakers aren't built yet.
 - Keep Bun-only APIs out of the core, or behind interfaces, so the code can also run on Node.
 
 ### Ledger (`server/src/modules/ledger/`, ADR 0003)
@@ -51,6 +52,22 @@ See `docs/adr/0002-initial-architecture.md`.
 - Accounts come from `chart` (`chart.ts`): memo `rail_inflow:{rail}` and `merchant_collected:{merchant}`, asset `fees_receivable:{merchant}`, revenue `fee_revenue`. Each exists separately per test/live mode.
 - Hand-written SQL (triggers, functions) goes in custom migrations: `bunx drizzle-kit generate --custom --name <name>`.
 - Drizzle Kit can't serialize `bigint` JS defaults (`0n`) into snapshots. Use ``.default(sql`0`)`` for BIGINT columns.
+- Drizzle can't declare partitioned tables or triggers. Generate the migration, then hand-edit it (see `0004_events.sql`), or use a custom migration.
+- DB-level SQLSTATE classes: `TL` ledger, `TP` payments, and `TA001` for generic append-only violations (`reject_append_only_mutation()`). Tests assert these codes with `pgErrorCode()`.
+
+### Jobs and events (`server/src/jobs/`, `server/src/modules/events/`)
+
+- `enqueue(tx, …)` writes a job **in the caller's transaction** (outbox). Workers claim with `SKIP LOCKED`. Delivery is at-least-once, so **handlers must be idempotent**. Use `dedupeKey` for one-per-thing jobs.
+- Failures retry with exponential backoff and go `dead` after `max_attempts`. Throw `RetryLater(seconds)` to choose the delay. Use `drain(db, queue, handlers)` in tests.
+- Publish events only through `EventBus.publish(tx, …)` in the same transaction as the change. It writes to `events` (monthly partitions + `events_default`) and a `dispatch_event` job. `data.object` is the public API representation.
+
+### Payments (`server/src/modules/payments/`, `server/src/connectors/`, ADR 0005)
+
+- `payment_intents` (`pi_`), `payment_attempts` (`pa_`, one per confirm, i.e. one request-to-pay) and append-only `payment_intent_transitions`. Triggers enforce the state machine and immutable columns (keep `status.ts` and `0006_payments_invariants.sql` in sync).
+- Confirm never calls a rail inline: it enqueues `request_to_pay` on `rail:<name>`. Rail reports, from callbacks or the simulator, are `rail_status` jobs handled by `applyRailStatus()`, which is idempotent per attempt.
+- **Never expire a `processing` intent by our clock.** Only the rail's `expired` report does that. `expireDuePaymentIntents()` only touches `requires_confirmation`.
+- Success commits status, fee (`computeFee`), ledger journal and event in one transaction.
+- Simulated rail (test mode only), with outcome by payer alias: `+249900000001` succeeds, `…02` declines, `…03` never responds, `…04` unknown alias. Live mode has no rail (`503 rail_unavailable`).
 
 ### Merchants and API keys (`server/src/modules/merchants/`)
 
@@ -63,7 +80,12 @@ See `docs/adr/0002-initial-architecture.md`.
 
 - `createApp({ db, keys })` builds the Hono app. `api.ts` only loads env and serves it, and tests call `app.request(...)` directly.
 - Errors always use the Stripe-style envelope `{ error: { type, code, message, param? } }`: throw `ApiError(status, type, code, message, param?)`. Unknown routes return a JSON 404.
-- Everything under `/v1` goes through `requireApiKey`. Handlers read `c.var.merchant`, `c.var.livemode` and `c.var.apiKey`, and **every query must be scoped by `(merchant_id, livemode)`**.
+- Everything under `/v1` goes through `requireApiKey`, then `idempotency`. Handlers read `c.var.merchant`, `c.var.livemode` and `c.var.apiKey`, and **every query must be scoped by `(merchant_id, livemode)`**.
+- Routes use `@hono/zod-openapi` (`createRoute` + `app.openapi`) with schemas in `http/schemas.ts`. Import `z` from `@hono/zod-openapi` there. The public spec is served at `/v1/openapi.json`.
+- **Every POST requires `Idempotency-Key`.** State-changing handlers must wrap their work in `idempotentTx(c, db, status, tx => …)`, which stores the response in the same transaction.
+- API conventions: amounts are integers (piasters), timestamps are ISO 8601 UTC, lists are `{ object: "list", data, has_more }` with `limit` and `starting_after`, and `currency` is `"SDG"`.
+- Map domain errors to HTTP in `http/errors.ts` (`toApiError`), not in handlers.
+- Validate internal IDs with `z.guid()`, never `z.uuid()`: our ULID-in-uuid values aren't RFC 4122, so `z.uuid()` rejects them at random.
 
 ## Layout
 
@@ -110,7 +132,7 @@ cd server && bun run create-merchant --name … --bank-code … --account …
 
 Before you call a change done, run `bun run lint`, `bun run typecheck` and `bun run test`.
 
-Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()` and `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant). Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
+Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()`, `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant) and `testPaymentsDeps()` (the simulated rail responds immediately). Use `must()` from `server/test/assert.ts` instead of `!`. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
 
 ## Conventions
 

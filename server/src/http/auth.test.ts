@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { createTestDb } from "../../test/db";
-import { createTestMerchant, testKeys } from "../../test/fixtures";
+import {
+  createTestMerchant,
+  testKeys,
+  testPaymentsDeps,
+} from "../../test/fixtures";
 import { createApiKey, setMerchantStatus } from "../modules/merchants";
 import { createApp } from "./app";
 import { type AuthVariables, requireApiKey } from "./auth";
@@ -81,14 +85,14 @@ describe("requireApiKey", () => {
 
 describe("createApp", () => {
   test("/v1 requires an API key; /health doesn't", async () => {
-    const api = createApp({ db: t.db, keys });
+    const api = createApp({ db: t.db, keys, payments: testPaymentsDeps(t.db) });
     expect((await api.request("/health")).status).toBe(200);
     expect((await api.request("/health/db")).status).toBe(200);
     expect((await api.request("/v1/anything")).status).toBe(401);
   });
 
   test("unknown routes get a JSON 404", async () => {
-    const api = createApp({ db: t.db, keys });
+    const api = createApp({ db: t.db, keys, payments: testPaymentsDeps(t.db) });
     const m = await createTestMerchant(t.db);
     const { secret } = await createApiKey(t.db, keys, {
       merchantId: m.id,
