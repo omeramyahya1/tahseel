@@ -50,6 +50,20 @@ See `docs/adr/0002-initial-architecture.md`.
 - Always post through `postJournal(tx, …)` inside the same transaction as the business state change. It's idempotent per `(source_type, source_id, kind)`. Corrections are new reversing journals, never edits.
 - Accounts come from `chart` (`chart.ts`): memo `rail_inflow:{rail}` and `merchant_collected:{merchant}`, asset `fees_receivable:{merchant}`, revenue `fee_revenue`. Each exists separately per test/live mode.
 - Hand-written SQL (triggers, functions) goes in custom migrations: `bunx drizzle-kit generate --custom --name <name>`.
+- Drizzle Kit can't serialize `bigint` JS defaults (`0n`) into snapshots. Use ``.default(sql`0`)`` for BIGINT columns.
+
+### Merchants and API keys (`server/src/modules/merchants/`)
+
+- `merchants` holds the ISO 20022 creditor account (`creditor_bank_code`, `creditor_account`) that payers pay directly, plus pricing (`fee_bps`, `fee_fixed`, `fee_min`, `fee_max`), all CHECK-constrained.
+- Fees: `computeFee(amount, pricingOf(merchant))` uses bigint math, rounds half-up, clamps to min/max, and never returns more than the amount.
+- API keys: `sk_test_`/`sk_live_` + 43 base62 chars. Only `HMAC-SHA256(pepper, secret)` (via `KeyProvider`) and `last4` are stored, and the secret is shown once. A key's mode is fixed at creation.
+- No onboarding UI yet: `cd server && bun run create-merchant --name … --bank-code … --account … [--fee-bps --fee-fixed --fee-min --fee-max]` prints one test and one live key.
+
+### HTTP (`server/src/http/`)
+
+- `createApp({ db, keys })` builds the Hono app. `api.ts` only loads env and serves it, and tests call `app.request(...)` directly.
+- Errors always use the Stripe-style envelope `{ error: { type, code, message, param? } }`: throw `ApiError(status, type, code, message, param?)`. Unknown routes return a JSON 404.
+- Everything under `/v1` goes through `requireApiKey`. Handlers read `c.var.merchant`, `c.var.livemode` and `c.var.apiKey`, and **every query must be scoped by `(merchant_id, livemode)`**.
 
 ## Layout
 
@@ -91,11 +105,12 @@ bun run lint                          # Biome check; `bun run format` to write
 bun run typecheck                     # all workspaces
 bun run build                         # all workspaces
 cd server && bun run db:generate | db:migrate | db:studio
+cd server && bun run create-merchant --name … --bank-code … --account …
 ```
 
 Before you call a change done, run `bun run lint`, `bun run typecheck` and `bun run test`.
 
-Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
+Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migrates a template database once, and each test file calls `createTestDb()` (`server/test/db.ts`) to get a fresh clone. `server/test/fixtures.ts` provides `testKeys()` and `createTestMerchant()` (ledger accounts with a `merchant_id` need a real merchant). Don't use transaction rollback for isolation: the deferred ledger triggers only fire at commit.
 
 ## Conventions
 
