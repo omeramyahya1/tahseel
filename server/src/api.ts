@@ -1,18 +1,16 @@
-import { Hono } from "hono";
+import { createEnvKeyProvider } from "./crypto/keys";
 import { createDb } from "./db/client";
 import { loadEnv } from "./env";
+import { createApp } from "./http/app";
 
 const env = loadEnv();
-const { sql } = createDb(env.DATABASE_URL);
-
-const app = new Hono();
-
-app.get("/health", (c) => c.json({ status: "ok" }));
-
-app.get("/health/db", async (c) => {
-  await sql`select 1`;
-  return c.json({ status: "ok" });
+const { db } = createDb(env.DATABASE_URL);
+const keys = createEnvKeyProvider({
+  apiKeyPepper: env.API_KEY_PEPPER,
+  secretsEncryptionKey: env.SECRETS_ENCRYPTION_KEY,
 });
+
+const app = createApp({ db, keys });
 
 export default {
   port: env.API_PORT,

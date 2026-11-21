@@ -53,6 +53,12 @@ bun run dev:web      # or dev:dashboard / dev:checkout / dev:ops
 
 Database migrations run from `server/`: `bun run db:generate`, `bun run db:migrate`.
 
+Create a merchant and its API keys (until the dashboard exists):
+
+```sh
+cd server && bun run create-merchant --name "Acme" --bank-code BOK --account 1234567890 --fee-bps 150 --fee-fixed 100
+```
+
 ## Notes
 
 - `apps/web` runs Astro on the Bun runtime (`bun --bun astro`), and pins TypeScript 6 because `astro check` does not support TypeScript 7 yet. All other workspaces use TypeScript 7.

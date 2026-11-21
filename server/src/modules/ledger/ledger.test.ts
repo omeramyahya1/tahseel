@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createTestDb } from "../../../test/db";
+import { createTestMerchant } from "../../../test/fixtures";
 import { pgErrorCode, withTx } from "../../db/client";
 import { newId } from "../../lib/ids";
 import {
@@ -21,7 +22,7 @@ afterAll(async () => {
   await t.drop();
 });
 
-const merchant = () => newId();
+const merchant = async () => (await createTestMerchant(t.db)).id;
 
 function feeJournal(merchantId: string, fee: bigint, sourceId = newId()) {
   return {
@@ -62,7 +63,7 @@ async function rawJournal(
 }
 
 async function accounts(livemode = false) {
-  const m = merchant();
+  const m = await merchant();
   const a = await ensureAccount(t.db, chart.feesReceivable(m), livemode);
   const b = await ensureAccount(t.db, chart.feeRevenue(), livemode);
   return { a, b };
@@ -70,7 +71,7 @@ async function accounts(livemode = false) {
 
 describe("postJournal", () => {
   test("posts a balanced journal and derives balances", async () => {
-    const m = merchant();
+    const m = await merchant();
     const { journal, created } = await withTx(t.db, (tx) =>
       postJournal(tx, feeJournal(m, 150n)),
     );
@@ -91,7 +92,7 @@ describe("postJournal", () => {
   });
 
   test("is idempotent per (source, kind)", async () => {
-    const m = merchant();
+    const m = await merchant();
     const source = newId();
     const first = await withTx(t.db, (tx) =>
       postJournal(tx, feeJournal(m, 100n, source)),
@@ -111,7 +112,7 @@ describe("postJournal", () => {
   });
 
   test("rejects unbalanced, single-posting and zero-amount journals in the app", async () => {
-    const m = merchant();
+    const m = await merchant();
     const unbalanced = feeJournal(m, 100n);
     unbalanced.postings[1] = { account: chart.feeRevenue(), amount: -99n };
     await expect(
@@ -135,7 +136,7 @@ describe("postJournal", () => {
   });
 
   test("rejects reusing an account code with a different type", async () => {
-    const m = merchant();
+    const m = await merchant();
     await ensureAccount(t.db, chart.feesReceivable(m), false);
     await expect(
       ensureAccount(
@@ -172,7 +173,7 @@ describe("database invariants", () => {
   });
 
   test("TL004: postings can't be appended to a committed journal", async () => {
-    const m = merchant();
+    const m = await merchant();
     const { journal } = await withTx(t.db, (tx) =>
       postJournal(tx, feeJournal(m, 10n)),
     );
@@ -188,7 +189,7 @@ describe("database invariants", () => {
   });
 
   test("TL001: ledger rows can't be updated, deleted or truncated", async () => {
-    const m = merchant();
+    const m = await merchant();
     const { journal } = await withTx(t.db, (tx) =>
       postJournal(tx, feeJournal(m, 10n)),
     );

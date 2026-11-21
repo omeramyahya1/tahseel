@@ -4,8 +4,10 @@ import {
   boolean,
   char,
   check,
+  customType,
   foreignKey,
   index,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -17,6 +19,79 @@ import {
 // Column names are snake_case via `casing: "snake_case"` (client + drizzle.config).
 // Ledger invariants that Drizzle can't express (balanced journals, append-only)
 // live in custom SQL migrations; see docs/adr/0003-ledger-design.md.
+
+// ---------------------------------------------------------------------------
+// Merchants
+// ---------------------------------------------------------------------------
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+
+export const merchantStatus = pgEnum("merchant_status", [
+  "active",
+  "suspended",
+]);
+
+export const merchants = pgTable(
+  "merchants",
+  {
+    id: uuid().primaryKey(),
+    name: text().notNull(),
+    status: merchantStatus().notNull().default("active"),
+    // ISO 20022 creditor: where payers pay directly (funds never touch Tahseel).
+    creditorBankCode: text().notNull(),
+    creditorAccount: text().notNull(),
+    // Pricing: fee = amount * feeBps / 10_000 + feeFixed, clamped to [feeMin, feeMax].
+    feeBps: integer().notNull().default(0),
+    feeFixed: bigint({ mode: "bigint" }).notNull().default(sql`0`),
+    feeMin: bigint({ mode: "bigint" }),
+    feeMax: bigint({ mode: "bigint" }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("merchants_name_nonempty", sql`length(trim(${t.name})) > 0`),
+    check(
+      "merchants_creditor_nonempty",
+      sql`length(trim(${t.creditorBankCode})) > 0 AND length(trim(${t.creditorAccount})) > 0`,
+    ),
+    check("merchants_fee_bps_range", sql`${t.feeBps} BETWEEN 0 AND 10000`),
+    check("merchants_fee_fixed_nonneg", sql`${t.feeFixed} >= 0`),
+    check(
+      "merchants_fee_min_nonneg",
+      sql`${t.feeMin} IS NULL OR ${t.feeMin} >= 0`,
+    ),
+    check(
+      "merchants_fee_max_nonneg",
+      sql`${t.feeMax} IS NULL OR ${t.feeMax} >= 0`,
+    ),
+    check(
+      "merchants_fee_min_le_max",
+      sql`${t.feeMin} IS NULL OR ${t.feeMax} IS NULL OR ${t.feeMin} <= ${t.feeMax}`,
+    ),
+  ],
+);
+
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid().primaryKey(),
+    merchantId: uuid()
+      .notNull()
+      .references(() => merchants.id),
+    livemode: boolean().notNull(),
+    // HMAC-SHA256(pepper, secret). The secret itself is never stored.
+    keyHash: bytea().notNull(),
+    last4: char({ length: 4 }).notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [
+    unique("api_keys_key_hash_key").on(t.keyHash),
+    index("api_keys_merchant_id_idx").on(t.merchantId),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // Ledger
@@ -39,7 +114,7 @@ export const ledgerAccounts = pgTable(
     type: ledgerAccountType().notNull(),
     currency: char({ length: 3 }).notNull(),
     livemode: boolean().notNull(),
-    merchantId: uuid(),
+    merchantId: uuid().references(() => merchants.id),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

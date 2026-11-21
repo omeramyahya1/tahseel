@@ -15,6 +15,13 @@
       "when": 1795251525903,
       "tag": "0001_ledger_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795252045775,
+      "tag": "0002_merchants_api_keys",
+      "breakpoints": true
     }
   ]
 }
