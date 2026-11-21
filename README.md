@@ -67,6 +67,16 @@ curl -s localhost:3000/v1/payment_intents/pi_.../confirm -H "Authorization: Bear
   -d '{"payer":{"alias":"+249900000001"}}'
 ```
 
+Register a webhook endpoint to be notified (the `secret` in the response is shown once; locally, `WEBHOOK_ALLOW_PRIVATE_URLS=true` lets it point at localhost):
+
+```sh
+curl -s localhost:3000/v1/webhook_endpoints -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"url":"http://localhost:4000/hooks","enabled_events":["*"]}'
+```
+
+Each delivery carries `Tahseel-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Missed one? `GET /v1/events`.
+
 The simulated rail settles it about 2 s later. Test aliases: `+249900000001` succeeds, `+249900000002` declines, `+249900000003` never responds (expires), `+249900000004` is an unknown alias. The OpenAPI spec is at `/v1/openapi.json`.
 
 Create a merchant and its API keys (until the dashboard exists):
