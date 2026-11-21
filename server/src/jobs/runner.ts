@@ -1,5 +1,5 @@
 import type { Db } from "../db/client";
-import { claim, complete, fail, type Job } from "./queue";
+import { claim, complete, fail, type Job, release } from "./queue";
 
 export type JobHandler = (job: Job) => Promise<void>;
 
@@ -22,7 +22,7 @@ async function runJob(db: Db, handlers: HandlerMap, job: Job) {
   try {
     if (!handler) throw new Error(`no handler for job kind "${job.kind}"`);
     await handler(job);
-    await complete(db, job.id);
+    await complete(db, job);
   } catch (err) {
     await fail(
       db,
@@ -62,31 +62,40 @@ export type QueueConfig = {
  */
 export function startQueue(db: Db, config: QueueConfig) {
   let stopped = false;
-  let inFlight = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let idle: (() => void) | undefined;
+  let polling: Promise<void> | null = null;
+  const inFlight = new Set<Promise<void>>();
 
-  const tick = async () => {
-    if (stopped) return;
-    try {
-      const free = config.concurrency - inFlight;
-      if (free > 0) {
-        const claimed = await claim(db, config.queue, free);
-        for (const job of claimed) {
-          inFlight++;
-          runJob(db, config.handlers, job)
-            .catch((err) => console.error(`[${config.queue}] job error`, err))
-            .finally(() => {
-              inFlight--;
-              if (stopped && inFlight === 0) idle?.();
-            });
-        }
-        if (claimed.length === free) return schedule(0);
-      }
-    } catch (err) {
-      console.error(`[${config.queue}] poll error`, err);
+  const poll = async () => {
+    const free = config.concurrency - inFlight.size;
+    if (free <= 0) return false;
+    const claimed = await claim(db, config.queue, free);
+    if (stopped) {
+      // stop() was called while claim() was in flight: hand the jobs back
+      // rather than starting work after shutdown.
+      await Promise.all(claimed.map((job) => release(db, job)));
+      return false;
     }
-    schedule(config.pollMs ?? 500);
+    for (const job of claimed) {
+      const run = runJob(db, config.handlers, job)
+        .catch((err) => console.error(`[${config.queue}] job error`, err))
+        .finally(() => inFlight.delete(run));
+      inFlight.add(run);
+    }
+    return claimed.length === free;
+  };
+
+  const tick = () => {
+    if (stopped) return;
+    polling = poll()
+      .catch((err) => {
+        console.error(`[${config.queue}] poll error`, err);
+        return false;
+      })
+      .then((busy) => schedule(busy ? 0 : (config.pollMs ?? 500)))
+      .finally(() => {
+        polling = null;
+      });
   };
 
   const schedule = (ms: number) => {
@@ -96,11 +105,15 @@ export function startQueue(db: Db, config: QueueConfig) {
   schedule(0);
 
   return {
-    /** Stops polling and waits for in-flight jobs to finish. */
+    /**
+     * Stops polling, waits for an in-progress poll (whose claimed jobs are
+     * released), then waits for in-flight jobs to finish.
+     */
     async stop() {
       stopped = true;
       clearTimeout(timer);
-      if (inFlight > 0) await new Promise<void>((r) => (idle = r));
+      if (polling) await polling;
+      await Promise.allSettled([...inFlight]);
     },
   };
 }

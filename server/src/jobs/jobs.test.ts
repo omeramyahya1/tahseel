@@ -3,7 +3,16 @@ import { sql } from "drizzle-orm";
 import { must } from "../../test/assert";
 import { createTestDb } from "../../test/db";
 import { newId } from "../lib/ids";
-import { claim, drain, enqueue, type Job, RetryLater, startQueue } from ".";
+import {
+  claim,
+  complete,
+  drain,
+  enqueue,
+  fail,
+  type Job,
+  RetryLater,
+  startQueue,
+} from ".";
 
 let t: Awaited<ReturnType<typeof createTestDb>>;
 
@@ -170,5 +179,70 @@ describe("job queue", () => {
     }
     await runner.stop();
     expect(done).toHaveLength(5);
+  });
+
+  test("a stale claim's ack updates nothing; the current claim's ack works", async () => {
+    const queue = q();
+    await enqueue(t.db, { queue, kind: "k", payload: {} });
+    const first = must((await claim(t.db, queue, 1))[0]);
+    await t.db.execute(
+      sql`update jobs set locked_until = now() - interval '1 second' where id = ${first.id}`,
+    );
+    const second = must((await claim(t.db, queue, 1))[0]);
+    expect(second.attempts).toBe(first.attempts + 1);
+
+    // The first worker finishes late: its acks must not touch the job.
+    expect(await complete(t.db, first)).toBe(false);
+    expect(await fail(t.db, first, new Error("late"))).toBe(false);
+    let [row] = await jobRows(queue);
+    expect(row).toMatchObject({
+      status: "running",
+      attempts: 2,
+      lastError: null,
+    });
+
+    expect(await complete(t.db, second)).toBe(true);
+    [row] = await jobRows(queue);
+    expect(row?.status).toBe("done");
+    // Acks don't apply twice either.
+    expect(await complete(t.db, second)).toBe(false);
+  });
+
+  test("stop() waits for an in-flight claim and releases what it claimed", async () => {
+    const queue = q();
+    await enqueue(t.db, { queue, kind: "k", payload: {} });
+    let handled = 0;
+
+    // Hold a table lock so the runner's claim() blocks mid-flight.
+    const locker = await t.sql.reserve();
+    await locker`begin`;
+    await locker`lock table jobs in access exclusive mode`;
+
+    const runner = startQueue(t.db, {
+      queue,
+      concurrency: 1,
+      pollMs: 10,
+      handlers: {
+        k: async () => {
+          handled++;
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50)); // claim() is now blocked
+
+    let stopped = false;
+    const stopping = runner.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stopped).toBe(false); // still waiting for the claim
+
+    await locker`rollback`;
+    locker.release();
+    await stopping;
+
+    expect(handled).toBe(0);
+    const [row] = await jobRows(queue);
+    expect(row).toMatchObject({ status: "pending", attempts: 0 });
   });
 });

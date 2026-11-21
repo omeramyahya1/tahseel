@@ -71,10 +71,38 @@ export async function claim(
     .returning();
 }
 
-export async function complete(db: DbOrTx, jobId: string): Promise<void> {
-  await db.execute(sql`
+/**
+ * Acknowledgements only apply to the claim they belong to: the job must
+ * still be running under the same claim generation (`attempts`). If the
+ * lock expired and another worker reclaimed the job, a late ack from the
+ * first worker updates nothing and returns false.
+ */
+const currentClaim = (job: Pick<Job, "id" | "attempts">) =>
+  sql`id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}`;
+
+export async function complete(
+  db: DbOrTx,
+  job: Pick<Job, "id" | "attempts">,
+): Promise<boolean> {
+  const rows = await db.execute(sql`
     UPDATE jobs SET status = 'done', locked_until = NULL, updated_at = now()
-    WHERE id = ${jobId}`);
+    WHERE ${currentClaim(job)}
+    RETURNING id`);
+  return rows.length > 0;
+}
+
+/** Returns a claimed job to the queue untouched (e.g. claimed during shutdown). */
+export async function release(
+  db: DbOrTx,
+  job: Pick<Job, "id" | "attempts">,
+): Promise<boolean> {
+  const rows = await db.execute(sql`
+    UPDATE jobs
+    SET status = 'pending', attempts = attempts - 1, locked_until = NULL,
+        updated_at = now()
+    WHERE ${currentClaim(job)}
+    RETURNING id`);
+  return rows.length > 0;
 }
 
 /** Exponential backoff: 2^attempts seconds, capped at 1 hour, with jitter. */
@@ -85,21 +113,23 @@ export function backoffSeconds(attempts: number): number {
 
 export async function fail(
   db: DbOrTx,
-  job: Job,
+  job: Pick<Job, "id" | "attempts" | "maxAttempts">,
   error: unknown,
   retryInSeconds = backoffSeconds(job.attempts),
-): Promise<void> {
+): Promise<boolean> {
   const message =
     error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   const dead = job.attempts >= job.maxAttempts;
-  await db.execute(sql`
+  const rows = await db.execute(sql`
     UPDATE jobs
     SET status = ${dead ? "dead" : "pending"},
         run_at = now() + make_interval(secs => ${retryInSeconds}),
         locked_until = NULL,
         last_error = ${message.slice(0, 2000)},
         updated_at = now()
-    WHERE id = ${job.id}`);
+    WHERE ${currentClaim(job)}
+    RETURNING id`);
+  return rows.length > 0;
 }
 
 /** Deletes finished jobs older than `days`. Dead jobs are kept for inspection. */
