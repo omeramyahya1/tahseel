@@ -12,7 +12,7 @@ export function createDb(url: string, options: { max?: number } = {}) {
     types: { bigint: postgres.BigInt },
     onnotice: () => {},
   });
-  const db = drizzle(sql, { schema });
+  const db = drizzle(sql, { schema, casing: "snake_case" });
   return { sql, db };
 }
 

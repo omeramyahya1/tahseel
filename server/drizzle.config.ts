@@ -6,6 +6,7 @@ export default defineConfig({
   out: "./migrations",
   // Only `migrate`/`studio` need a connection; `generate` works offline.
   dbCredentials: { url: process.env.DATABASE_URL ?? "" },
+  casing: "snake_case",
   strict: true,
   verbose: true,
 });
