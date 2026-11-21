@@ -141,8 +141,8 @@ describe("POST /v1/payment_intents", () => {
     const idem = newId();
     const raw = JSON.stringify({ amount: 100, currency: "SDG" });
     const { createHash } = await import("node:crypto");
-    await t.sql`insert into idempotency_keys (merchant_id, livemode, key, request_hash)
-      values (${merchant.id}, false, ${idem},
+    await t.sql`insert into idempotency_keys (merchant_id, livemode, key, claim_token, request_hash)
+      values (${merchant.id}, false, ${idem}, gen_random_uuid(),
               ${createHash("sha256").update(`POST\n/v1/payment_intents\n${raw}`).digest()})`;
     const res = await app.request("/v1/payment_intents", {
       method: "POST",

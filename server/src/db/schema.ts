@@ -377,6 +377,8 @@ export const idempotencyKeys = pgTable(
       .references(() => merchants.id),
     livemode: boolean().notNull(),
     key: text().notNull(),
+    // Identifies the request that currently owns the key (see http/idempotency.ts).
+    claimToken: uuid().notNull(),
     // SHA-256 of method, path and raw body: same key + different request = 422.
     requestHash: bytea().notNull(),
     status: idempotencyKeyStatus().notNull().default("in_progress"),

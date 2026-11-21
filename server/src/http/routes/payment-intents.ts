@@ -169,7 +169,7 @@ export function paymentIntentRoutes(deps: AppDeps) {
         );
       }
     }
-    const result = await idempotentTx(c, deps.db, 200, async (tx) => {
+    const result = await idempotentTx(c, deps, 200, async (tx) => {
       const { intent, attempt } = await createPaymentIntent(tx, deps.payments, {
         merchantId: c.var.merchant.id,
         livemode: c.var.livemode,
@@ -227,7 +227,7 @@ export function paymentIntentRoutes(deps: AppDeps) {
   app.openapi(routes.confirm, async (c) => {
     const id = parseId(c.req.valid("param").id);
     const { payer } = c.req.valid("json");
-    const result = await idempotentTx(c, deps.db, 200, async (tx) => {
+    const result = await idempotentTx(c, deps, 200, async (tx) => {
       const { intent, attempt } = await confirmPaymentIntent(
         tx,
         deps.payments,
@@ -245,7 +245,7 @@ export function paymentIntentRoutes(deps: AppDeps) {
 
   app.openapi(routes.cancel, async (c) => {
     const id = parseId(c.req.valid("param").id);
-    const result = await idempotentTx(c, deps.db, 200, async (tx) => {
+    const result = await idempotentTx(c, deps, 200, async (tx) => {
       const { intent, attempt } = await cancelPaymentIntent(tx, deps.payments, {
         merchantId: c.var.merchant.id,
         livemode: c.var.livemode,
