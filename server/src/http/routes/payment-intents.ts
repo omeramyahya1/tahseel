@@ -15,34 +15,15 @@ import { ApiError, validationError } from "../errors";
 import { type IdempotencyVariables, idempotentTx } from "../idempotency";
 import {
   Amount,
-  ErrorResponse,
   IdempotencyHeaders,
   listOf,
   Metadata,
   PayerAlias,
   PaymentIntent,
 } from "../schemas";
+import { errorResponses as errors, ok, security } from "./common";
 
 const tags = ["Payment intents"];
-const security = [{ bearerAuth: [] }];
-const errors = {
-  400: {
-    description: "Invalid request",
-    content: { "application/json": { schema: ErrorResponse } },
-  },
-  401: {
-    description: "Missing or invalid API key",
-    content: { "application/json": { schema: ErrorResponse } },
-  },
-  404: {
-    description: "Not found",
-    content: { "application/json": { schema: ErrorResponse } },
-  },
-};
-const ok = (description: string, schema: z.ZodTypeAny) => ({
-  200: { description, content: { "application/json": { schema } } },
-});
-
 const IdParam = z.object({
   id: z.string().openapi({
     param: { name: "id", in: "path" },
