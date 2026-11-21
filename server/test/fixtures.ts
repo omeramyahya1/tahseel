@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { createEnvKeyProvider } from "../src/crypto/keys";
+import { createEnvKeyProvider, type KeyProvider } from "../src/crypto/keys";
 import type { Db, DbOrTx } from "../src/db/client";
 import { newId } from "../src/lib/ids";
 import {
@@ -30,4 +30,14 @@ export function createTestMerchant(
 /** Payments deps with the simulated rail responding immediately. */
 export function testPaymentsDeps(db: Db) {
   return createPaymentsDeps(db, { simulatedResponseDelayMs: 0 });
+}
+
+/** Full app deps for HTTP tests. Webhooks may target localhost receivers. */
+export function testAppDeps(db: Db, keys: KeyProvider) {
+  return {
+    db,
+    keys,
+    payments: testPaymentsDeps(db),
+    webhooks: { keys, urlPolicy: { allowPrivate: true }, timeoutMs: 2_000 },
+  };
 }

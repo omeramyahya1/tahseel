@@ -88,6 +88,43 @@ export const PaymentIntent = z
   })
   .openapi("PaymentIntent");
 
+export const Event = z
+  .object({
+    id: z.string().openapi({ example: "evt_01JDZ8Q0Y3M7S5K2V4T6W8X0YZ" }),
+    object: z.literal("event"),
+    type: z.string().openapi({ example: "payment_intent.succeeded" }),
+    livemode: z.boolean(),
+    created_at: Timestamp,
+    data: z.object({
+      object: z.record(z.string(), z.unknown()).openapi({
+        description: "The API object as it was when the event happened.",
+      }),
+    }),
+  })
+  .openapi("Event");
+
+export const WebhookEndpoint = z
+  .object({
+    id: z.string().openapi({ example: "we_01JDZ8Q0Y3M7S5K2V4T6W8X0YZ" }),
+    object: z.literal("webhook_endpoint"),
+    livemode: z.boolean(),
+    url: z.string(),
+    description: z.string().nullable(),
+    enabled_events: z.array(z.string()),
+    created_at: Timestamp,
+    secret: z.string().optional().openapi({
+      description:
+        "Signing secret (`whsec_…`). Only returned when the endpoint is created.",
+    }),
+  })
+  .openapi("WebhookEndpoint");
+
+export const DeletedObject = z.object({
+  id: z.string(),
+  object: z.string(),
+  deleted: z.literal(true),
+});
+
 export const IdempotencyHeaders = z.object({
   "idempotency-key": z.string().max(255).openapi({
     description:
