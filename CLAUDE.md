@@ -9,7 +9,9 @@ Tahseel is a Stripe-like payment gateway for Sudan. Merchants create payment req
 The problem it solves: today a Sudanese merchant confirms payment from a BBAN plus a screenshot or a transaction ID. Tahseel replaces that with rail-confirmed, API-verifiable payments.
 
 - **Regulator:** Central Bank of Sudan (CBoS). Every bank or wallet integration needs CBoS prior written approval. Never launch anything publicly ahead of the regulator.
-- **Standards target:** the CBoS 2014 switch-operator circular: PCI DSS, HSM-held keys, a unique ID per transaction, audit logs, fraud detection, separate DR and test environments, zero-downtime changes, disputes, a support centre, and **75 TPS** (load-test to about 5×).
+- **Standards target:** the CBoS 2014 switch-operator circular: HSM-held keys, a unique ID per transaction, audit logs, fraud detection, separate DR and test environments, zero-downtime changes, disputes, a support centre, and **75 TPS** (load-test to about 5×). Its "PCI DSS 2.1" and ISO 8583 items are read as described in `docs/adr/0004-security-and-standards-baseline.md`: **PCI DSS v4.0.1 controls as the baseline, with card data out of scope** (no PAN/CVV ever touches our systems). **ISO 20022** is the domain/messaging standard. ISO 8583 is deferred to a card connector, if one is ever needed.
+- **Fund flow (v1): direct to merchant.** Payers pay straight into the merchant's own account. Tahseel never holds merchant funds; it confirms payments and **accrues fees** (per-merchant pricing: percent + fixed, min/max caps), billed separately.
+- **Rails (MVP):** no real rail access yet (talks with NTC and EBS are in progress), so a **simulated rail** adapter stands in, test mode only.
 - **NIPS:** ISO 20022 (pain.013 request-to-pay, pacs.002 status), EMVCo QR, alias directory. Model payments with ISO 20022 concepts so a NIPS connector is additive later.
 - **Main competitor:** YallaPay (Istinara/Bravo).
 - **Team:** one developer. Prefer the simplest thing that is operable by one person.
@@ -40,6 +42,14 @@ See `docs/adr/0002-initial-architecture.md`.
 - Event-driven on Postgres: transactional outbox, `SELECT … FOR UPDATE SKIP LOCKED` job queue, partitioned append-only event log, all behind an `EventBus` interface. No external broker yet.
 - Each rail connector in `server/src/connectors/` implements one interface and gets its own queue, concurrency limit and circuit breaker.
 - Keep Bun-only APIs out of the core, or behind interfaces, so the code can also run on Node.
+
+### Ledger (`server/src/modules/ledger/`, ADR 0003)
+
+- Append-only `ledger_accounts`, `ledger_journals` and `ledger_postings`. Amounts are signed `BIGINT` (debit +, credit −). Balances are always derived (`SUM`); there are no stored balance rows and no account locks.
+- The DB enforces the invariants in `server/migrations/0001_ledger_invariants.sql`: `TL001` append-only, `TL002` ≥2 postings, `TL003` balanced per currency at commit, `TL004` postings only in the journal's own transaction. Composite FKs block cross-mode and cross-currency postings, and a CHECK makes the database SDG-only.
+- Always post through `postJournal(tx, …)` inside the same transaction as the business state change. It's idempotent per `(source_type, source_id, kind)`. Corrections are new reversing journals, never edits.
+- Accounts come from `chart` (`chart.ts`): memo `rail_inflow:{rail}` and `merchant_collected:{merchant}`, asset `fees_receivable:{merchant}`, revenue `fee_revenue`. Each exists separately per test/live mode.
+- Hand-written SQL (triggers, functions) goes in custom migrations: `bunx drizzle-kit generate --custom --name <name>`.
 
 ## Layout
 
@@ -90,7 +100,8 @@ Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migra
 ## Conventions
 
 - Record significant decisions as a new ADR in `docs/adr/` (never edit an accepted one; supersede it).
-- Every payment gets a ULID, stored alongside the rail's own reference.
+- IDs are ULIDs (`newId()` in `server/src/lib/ids.ts`), stored in `uuid` columns and exposed as prefixed public IDs (`toPublicId("pi", id)` → `pi_01J…`). Every payment stores the rail's own reference alongside its ID.
+- Drizzle uses `casing: "snake_case"`: write camelCase in `schema.ts`, and the columns are snake_case.
 - The public API follows Stripe's object model: payment intents, idempotency keys, signed webhooks, refunds, payouts.
 
 ## Open questions
@@ -98,6 +109,5 @@ Tests (`bun test` in `server/`) run against real Postgres. `test/setup.ts` migra
 Don't assume answers to these; ask.
 
 - Is in-country hosting required? This affects the HSM (physical HSM vs cloud KMS), the database and DR.
-- Which bank or wallet is the first rail, and does it give us an API, statement files, or only unique amounts for reconciliation?
-- In phase 1, does money go direct to the merchant, or through a pooled collection account?
+- Which bank or wallet is the first real rail (NTC/EBS talks are ongoing), and does it give us an API, statement files, or only unique amounts for reconciliation?
 - Licensing path: technical provider under a licensed partner, our own FIMP licence, or a new PSP category.
